@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { CardSkeleton } from "@/shared/components";
+import XiaomiMimoAuthModal from "@/shared/components/XiaomiMimoAuthModal";
 import {
   APIKEY_PROVIDERS,
   FREE_PROVIDERS,
@@ -58,6 +59,7 @@ export default function ProviderDetailPage() {
   const providerId = params.id;
   const [providerNode, setProviderNode] = useState(null);
   const [showOAuthModal, setShowOAuthModal] = useState(false);
+  const [showXiaomiMimoModal, setShowXiaomiMimoModal] = useState(false);
   const [showIFlowCookieModal, setShowIFlowCookieModal] = useState(false);
   const [showAddApiKeyModal, setShowAddApiKeyModal] = useState(false);
   const [showBulkImportCodex, setShowBulkImportCodex] = useState(false);
@@ -357,6 +359,10 @@ export default function ProviderDetailPage() {
         return;
       }
     }
+    if (providerId === "xiaomi-mimo") {
+      setShowXiaomiMimoModal(true);
+      return;
+    }
     if (isOAuth) {
       openOAuthConnection();
       return;
@@ -540,6 +546,9 @@ export default function ProviderDetailPage() {
 
       <ProviderConnectionsCard
         providerId={providerId}
+        enabledConnectionsCount={connections.filter(
+          (connection) => connection?.isActive !== false,
+        ).length}
         isFreeNoAuth={isFreeNoAuth}
         isOAuth={isOAuth}
         isCompatible={isCompatible}
@@ -790,6 +799,12 @@ export default function ProviderDetailPage() {
         onCloseConfirm={() => setConfirmState(null)}
         activeJsonConnection={activeJsonConnection}
         onCloseJsonModal={() => setActiveJsonConnection(null)}
+      />
+
+      <XiaomiMimoAuthModal
+        isOpen={showXiaomiMimoModal}
+        onSuccess={handleOAuthSuccess}
+        onClose={() => setShowXiaomiMimoModal(false)}
       />
 
       {providerId === "grok-cli" && (

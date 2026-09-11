@@ -3,6 +3,8 @@ import { FORMATS } from "../formats.js";
 import { v4 as uuidv4 } from "uuid";
 import { extractThinking } from "../concerns/thinkingUnified.js";
 import { effortToBudget, budgetToLevel } from "../concerns/thinking.js";
+import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { systemReminderText } from "../helpers/claudeHelper.js";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.js";
 
 function stripAnthropicBillingHeader(text) {
@@ -165,13 +167,13 @@ function fixMissingToolResponses(messages) {
 // Convert single Claude message - returns single message or array of messages
 function convertClaudeMessage(msg) {
   // Upstream fix from open-sse commit 749c2e3f9
-  // Map mid-conversation system message to user role to prevent 400 errors with LiteLLM
-  // Claude Code inserts role:system at end of messages[], previously mapped to assistant
-  // causing conversation not ending with user → OpenAI-compat provider (LiteLLM) translates
-  // back to Anthropic returning 400 "assistant message prefill"
   let role = msg.role === "user" || msg.role === "tool" ? "user" : "assistant";
-  if (msg.role === "system") {
-    role = "user"; // Map system → user and wrap in <system-reminder> to preserve instruction semantics
+  if (msg.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
+    msg.content = [msg.content];
+  }
+  if (msg.role === ROLE.SYSTEM) {
+    const text = systemReminderText(msg.content);
+    return text ? { role: ROLE.USER, content: text } : null;
   }
 
   // Simple string content

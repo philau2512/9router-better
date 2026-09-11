@@ -1,5 +1,6 @@
 import { FORMATS } from "./formats.js";
-import { ensureToolCallIds, fixMissingToolResponses } from "./concerns/toolCall.js";
+import { fixMissingToolResponses } from "./concerns/toolCall.js";
+import { ensureToolCallIds } from "./helpers/toolCallHelper.js";
 import { prepareClaudeRequest } from "./formats/claude.js";
 import { cloakClaudeTools, decloakStreamChunk } from "../utils/claudeCloaking.js";
 import { filterToOpenAIFormat } from "./formats/openai.js";

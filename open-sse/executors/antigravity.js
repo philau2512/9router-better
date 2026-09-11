@@ -21,6 +21,7 @@ import {
 } from "../translator/helpers/geminiHelper.js";
 import { ANTIGRAVITY_MODEL_ALIASES } from "../providers/antigravity-provider-metadata.js";
 import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
+import { normalizeGeminiContents } from "../translator/formats/gemini.js";
 import { DEFAULT_THINKING_AG_SIGNATURE } from "../config/defaultThinkingSignature.js";
 import { getGeminiThoughtSignatureSync } from "../services/thoughtSignatureStore.js";
 
@@ -223,7 +224,7 @@ export class AntigravityExecutor extends BaseExecutor {
     const keepThoughtParts = shouldPreserveThoughtParts(
       body.request?.generationConfig,
     );
-    const contents = body.request?.contents?.map((c) => {
+    const rawContents = (body.request?.contents || []).map((c) => {
       let role = c.role;
       // functionResponse must be role "user" for Claude models
       if (c.parts?.some((p) => p.functionResponse)) {
@@ -285,6 +286,12 @@ export class AntigravityExecutor extends BaseExecutor {
       }
       return c;
     });
+    const normalizedContents = normalizeGeminiContents(rawContents);
+    const contents =
+      rawContents[0]?.role === "model" &&
+      rawContents[0]?.parts?.some((part) => part.thought === true)
+        ? normalizedContents.slice(1)
+        : normalizedContents;
 
     // Sanitize tool schemas and function names before sending to Antigravity.
     let tools = body.request?.tools;

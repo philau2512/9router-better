@@ -6,6 +6,9 @@ import { createRequire } from "module";
 export const GEMINI_CLI_VERSION = "0.34.0";
 export const GEMINI_CLI_API_CLIENT = "google-genai-sdk/1.41.0 gl-node/v22.19.0";
 
+// === Codex CLI === derive từ registry codex.transport
+export const CODEX_CLI_VERSION = "0.154.0";
+
 // Map Node arch to Gemini CLI arch string (x64/x86/arm64/...)
 function geminiCLIArch() {
   const a = arch();

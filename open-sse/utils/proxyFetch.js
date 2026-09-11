@@ -522,23 +522,32 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
     }
   }
 
+  const fetchFn =
+    globalThis.fetch && globalThis.fetch !== patchedFetch
+      ? globalThis.fetch
+      : originalFetch;
+
   // Use pooled undici Agent for direct requests (connection reuse, HTTP/2)
   const directAgent = await getDirectAgent(targetUrl);
   if (directAgent) {
     timing.mode = "pooled";
-    const response = await originalFetch(url, {
+    const response = await fetchFn(url, {
       ...options,
       dispatcher: directAgent,
     });
     timing.headersAt = Date.now();
-    response.__timing = timing;
+    if (response && typeof response === "object") {
+      response.__timing = timing;
+    }
     return response;
   }
 
   // Fallback to native fetch if Agent creation failed
-  const response = await originalFetch(url, options);
+  const response = await fetchFn(url, options);
   timing.headersAt = Date.now();
-  response.__timing = timing;
+  if (response && typeof response === "object") {
+    response.__timing = timing;
+  }
   return response;
 }
 

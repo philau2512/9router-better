@@ -54,6 +54,7 @@ function ensureGeminiOutputFloor(generationConfig, floor) {
     generationConfig.maxOutputTokens = floor;
   }
 }
+import { ROLE, GEMINI_ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 
 // Sanitize function names for Gemini API.
 // Gemini requires: starts with [a-zA-Z_], followed by [a-zA-Z0-9_.:\-], max 64 chars.
@@ -250,13 +251,15 @@ function openaiToGeminiBase(
 
           // Check if there are actual tool responses in the next messages
           const hasActualResponses = toolCallIds.some(
-            (fid) => toolResponses[fid],
+            (fid) => toolResponses[fid] !== undefined,
           );
+          const isIntermediate = i < body.messages.length - 1;
 
-          if (hasActualResponses) {
+          if (hasActualResponses || isIntermediate) {
             const toolParts = [];
             for (const fid of toolCallIds) {
-              if (!toolResponses[fid]) continue;
+              let resp = toolResponses[fid];
+              if (resp === undefined) resp = "";
 
               let name = tcID2Name[fid];
               if (!name) {
@@ -268,7 +271,6 @@ function openaiToGeminiBase(
                 }
               }
 
-              let resp = toolResponses[fid];
               let parsedResp = tryParseJSON(resp);
               if (parsedResp === null) {
                 parsedResp = { result: resp };

@@ -19,21 +19,46 @@ import {
 
 import REGISTRY from "./registry/index.js";
 
-// Merge registry transport.usage into legacy TRANSPORTS table
+const PROVIDER_CONFIG = TRANSPORTS;
+const PROVIDERS = Object.fromEntries(
+  Object.entries(PROVIDER_CONFIG).map(([id, config]) => [
+    id,
+    {
+      ...config,
+      headers: config.headers ? { ...config.headers } : config.headers,
+      quirks: config.quirks ? { ...config.quirks } : config.quirks,
+      usage: config.usage ? { ...config.usage } : config.usage,
+    },
+  ]),
+);
+
+// Merge registry metadata into the compatibility export without mutating the
+// canonical config table imported by legacy executors.
 for (const entry of REGISTRY) {
-  if (entry.transport?.usage) {
-    if (!TRANSPORTS[entry.id]) {
-      TRANSPORTS[entry.id] = { usage: entry.transport.usage };
-    } else {
-      TRANSPORTS[entry.id].usage = {
-        ...entry.transport.usage,
-        ...(TRANSPORTS[entry.id].usage || {}),
-      };
-    }
+  if (entry.transport) {
+    const existing = PROVIDERS[entry.id] || {};
+    PROVIDERS[entry.id] = {
+      ...entry.transport,
+      ...existing,
+      headers: {
+        ...(entry.transport.headers || {}),
+        ...(existing.headers || {}),
+      },
+      quirks: {
+        ...(entry.transport.quirks || {}),
+        ...(existing.quirks || {}),
+      },
+      usage: {
+        ...(entry.transport.usage || {}),
+        ...(existing.usage || {}),
+      },
+      cliVersion: entry.transport.cliVersion ?? existing.cliVersion,
+      forceStream: entry.transport.forceStream ?? existing.forceStream,
+    };
   }
 }
 
-export const PROVIDERS = TRANSPORTS;
+export { PROVIDERS };
 export const PROVIDER_MODELS = CONFIG_PROVIDER_MODELS;
 
 export { PROVIDER_ID_TO_ALIAS, getModelsByProviderId, getModelTargetFormat };

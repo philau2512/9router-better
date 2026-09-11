@@ -26,6 +26,7 @@ import {
   saveRequestDetail,
 } from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
+import { PROVIDERS } from "../providers/index.js";
 import { buildAntigravityEmptyStopContinuation } from "../executors/antigravity.js";
 import {
   buildRequestDetail,
@@ -66,6 +67,7 @@ import {
 } from "../utils/antigravityReasoningReplay.js";
 import {
   defaultClaudeToolType,
+  shouldDefaultClaudeToolType,
   stripOrphanedToolResults,
 } from "../translator/concerns/toolCall.js";
 import { compressWithPxpipe, formatPxpipeLog } from "../rtk/pxpipe.js";
@@ -127,7 +129,6 @@ function maskLoggedUrl(rawUrl) {
     return "<invalid-url>";
   }
 }
-
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -513,8 +514,13 @@ export async function handleChatCore({
     delete translatedBody.tools;
   }
 
-  // Claude tool schema requires an explicit type on strict gateways.
-  if (finalFormat === FORMATS.CLAUDE && Array.isArray(translatedBody.tools)) {
+  // Claude tool schema requires `type` to be explicitly set; strict gateways (e.g., MiniMax)
+  // reject legacy payloads that omit it with HTTP 400. Default to "custom" when missing.
+  // Provider-scoped via quirks (shouldDefaultClaudeToolType): only gateways that declare
+  // requireClaudeToolType get the explicit type. Applying it unconditionally breaks
+  // Claude-format endpoints that only accept the legacy typeless tool shape — DeepSeek's
+  // Anthropic-compatible endpoint 400s with "unknown variant `custom`" (#3905).
+  if (shouldDefaultClaudeToolType(provider, finalFormat, translatedBody.tools, PROVIDERS)) {
     translatedBody.tools = defaultClaudeToolType(translatedBody.tools);
   }
 

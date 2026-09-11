@@ -179,8 +179,15 @@
   },
   "codex": {
     "baseUrl": "https://chatgpt.com/backend-api/codex/responses",
-    "clientId": "app_EMoamEEZ73f0CkXaXp7hrann",
     "format": "openai-responses",
+    "forceStream": true,
+    "cliVersion": "0.136.0",
+    "usage": {
+      "url": "https://chatgpt.com/backend-api/wham/usage",
+      "resetCreditsUrl": "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+      "resetCreditsConsumeUrl": "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+    },
+    "clientId": "app_EMoamEEZ73f0CkXaXp7hrann",
     "headers": {
       "User-Agent": "codex_cli_rs/0.136.0",
       "originator": "codex_cli_rs"
