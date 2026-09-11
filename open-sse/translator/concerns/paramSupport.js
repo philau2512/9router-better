@@ -23,6 +23,9 @@ const STRIP_RULES = [
     drop: ["reasoning", "reasoning_effort", "thinking"],
   },
   // Volcengine Ark GLM-5 rejects max_tokens above the model output ceiling.
+  // MiMo Desktop Preview models (account-service route): content must be plain string,
+  // rejects OpenAI content-part array. Cloud models keep their parts (mimo-v2-omni is multi-modal).
+  { provider: "xiaomi-mimo", match: /preview/i, flattenContent: true },
   { provider: "volcengine-ark", match: /glm-5/i, clampToModelMaxOutput: true },
   // VolcEngine Ark caps Kimi family at max_tokens <= 32768. Model's advertised
   // ceiling is far higher (Kimi-K2.7-Code → maxOutput 262144), so clampToModelMaxOutput

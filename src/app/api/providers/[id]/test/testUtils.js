@@ -10,8 +10,8 @@ import {
 } from "@/shared/constants/providers";
 import { PROVIDER_ENDPOINTS, QUOTA_AUTOPING_CONFIG } from "@/shared/constants/config";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
-import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
-import {
+import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
+import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";import {
   refreshProviderCredentials,
   shouldRefreshCredentials,
   shouldRefreshCredentialsForUsage,
@@ -140,11 +140,15 @@ const OAUTH_TEST_CONFIG = {
     method: "POST",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+
     extraHeaders: {
       "Content-Type": "application/json",
       originator: "codex_cli_rs",
       "User-Agent": "codex_cli_rs/0.136.0",
     },
+
+    extraHeaders: { "Content-Type": "application/json", "originator": "codex_cli_rs", "User-Agent": `codex_cli_rs/${CODEX_CLI_VERSION}` },
+
     // Minimal invalid body — triggers fast 400 without consuming quota
     body: JSON.stringify({
       model: "gpt-5.3-codex",

@@ -6,7 +6,10 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
 
 import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
 import { getUsageForProvider } from "../../open-sse/services/usage.js";
-import { extractSubscriptionTier } from "../../open-sse/services/usage/antigravity.js";
+import {
+  extractSubscriptionTier,
+  extractValidationInfo,
+} from "../../open-sse/services/usage/antigravity.js";
 import {
   ANTIGRAVITY_USAGE_ENDPOINT_SETS,
 } from "../../open-sse/providers/antigravity-provider-metadata.js";
@@ -154,6 +157,63 @@ describe("Antigravity usage", () => {
     await expect(getUsageForProvider({ ...request, projectId: "cached-project" })).resolves.toMatchObject({
       message: expect.stringContaining("authentication expired"),
       quotas: {},
+    });
+  });
+
+  it("extracts validation info when account requires verification", () => {
+    const info = {
+      ineligibleTiers: [
+        {
+          reasonCode: "VALIDATION_REQUIRED",
+          reasonMessage: "Your current account is not eligible for Antigravity. Verify your account to continue.",
+          validationErrorMessage: "Verify your account to continue.",
+          validationUrlLinkText: "Verify your account",
+          validationUrl: "https://accounts.google.com/signin/continue?sarp=1",
+          validationLearnMoreUrl: "https://support.google.com/accounts?p=al_alert",
+        },
+      ],
+    };
+
+    expect(extractValidationInfo(info)).toEqual({
+      reasonCode: "VALIDATION_REQUIRED",
+      message: "Verify your account to continue.",
+      url: "https://accounts.google.com/signin/continue?sarp=1",
+      urlText: "Verify your account",
+      learnMoreUrl: "https://support.google.com/accounts?p=al_alert",
+    });
+
+    expect(extractValidationInfo({})).toBeNull();
+  });
+
+  it("surfaces validation payload in usage when subscription lookup indicates verification needed", async () => {
+    proxyAwareFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          cloudaicompanionProject: "aicode-consumers",
+          ineligibleTiers: [
+            {
+              reasonCode: "VALIDATION_REQUIRED",
+              validationErrorMessage: "Verify your account to continue.",
+              validationUrl: "https://accounts.google.com/signin/continue?sarp=1",
+              validationUrlLinkText: "Verify your account",
+              validationLearnMoreUrl: "https://support.google.com/accounts?p=al_alert",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ models: {} }))
+      .mockResolvedValueOnce(jsonResponse({ groups: [] }));
+
+    const usage = await getUsageForProvider(request, proxyOptions);
+
+    expect(usage).toMatchObject({
+      validation: {
+        reasonCode: "VALIDATION_REQUIRED",
+        message: "Verify your account to continue.",
+        url: "https://accounts.google.com/signin/continue?sarp=1",
+        urlText: "Verify your account",
+        learnMoreUrl: "https://support.google.com/accounts?p=al_alert",
+      },
     });
   });
 });

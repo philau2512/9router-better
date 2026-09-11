@@ -155,10 +155,19 @@ async function readResponsePrefix(response, signal, maxBytes, timeoutMs) {
   return decoder.decode(concatChunks(chunks, totalBytes));
 }
 
+// The instruction goes into the current user turn, never into a top-level
+// `systemPrompt`: kiro.dev answers any body carrying that field with
+// 400 REQUEST_BODY_INVALID, so writing it here turned every repair retry into
+// a hard failure.
 function appendRepairInstruction(body, kind) {
   const repaired = structuredClone(body || {});
   const instruction = REPAIR_INSTRUCTIONS[kind] || "Retry the previous incomplete Kiro response.";
-  repaired.systemPrompt = repaired.systemPrompt ? `${repaired.systemPrompt}\n\n${instruction}` : instruction;
+  delete repaired.systemPrompt;
+  const msg = repaired?.conversationState?.currentMessage?.userInputMessage;
+  if (msg) {
+    const content = typeof msg.content === "string" ? msg.content : "";
+    msg.content = content ? `${content}\n\n${instruction}` : instruction;
+  }
   return repaired;
 }
 
@@ -343,13 +352,21 @@ export class KiroExecutor extends BaseExecutor {
 
     const profileArn = resolveKiroRequestProfileArn(credentials, { endpoint: url });
     if (profileArn) headers["x-amzn-codewhisperer-profile-arn"] = profileArn;
+    // CLIRO parity for the Amazon surfaces: the Kiro runtime accepts the
+    // SSO bearer header + agent-mode marker. Without these the deprecated
+    // path gateway answers REQUEST_BODY_INVALID for modern payloads.
+    if (credentials?.accessToken) {
+      headers["x-amz-sso-bearer"] = credentials.accessToken;
+    }
+    headers["x-amzn-codewhisperer-machine-id"] = "kiro-desktop";
+
     return headers;
   }
 
   getOrderedBaseUrls(credentials) {
     const baseUrls = this.getBaseUrls();
     const authMethod = credentials?.providerSpecificData?.authMethod;
-    const needsAmazonSurface = ["api_key", "external_idp", "idc"].includes(authMethod);
+    const needsAmazonSurface = ["api_key", "external_idp", "idc", "builder-id"].includes(authMethod);
     if (!needsAmazonSurface) return baseUrls;
 
     const region = (credentials?.providerSpecificData?.region || "us-east-1").trim();
@@ -359,11 +376,10 @@ export class KiroExecutor extends BaseExecutor {
         : url;
     const amazon = baseUrls.filter((url) => url.includes("amazonaws.com")).map(regionalize);
     const others = baseUrls.filter((url) => !url.includes("amazonaws.com"));
-    if (authMethod === "api_key") {
-      const q = amazon.filter((url) => url.includes("://q."));
-      return q.length > 0 ? [...q, ...amazon.filter((url) => !url.includes("://q.")), ...others] : [...amazon, ...others];
-    }
-    return amazon.length > 0 ? [...amazon, ...others] : baseUrls;
+    const q = amazon.filter((url) => url.includes("://q."));
+    return q.length > 0
+      ? [...q, ...amazon.filter((url) => !url.includes("://q.")), ...others]
+      : [...amazon, ...others];
   }
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {

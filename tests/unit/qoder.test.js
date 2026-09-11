@@ -9,7 +9,23 @@
  *   - device flow URL construction
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
+  proxyAwareFetch: vi.fn(),
+}));
+
+vi.mock("../../open-sse/services/qoderModels.js", async () => {
+  const actual = await vi.importActual("../../open-sse/services/qoderModels.js");
+  return {
+    ...actual,
+    getQoderModelConfig: vi.fn(),
+    resolveQoderCredentials: vi.fn(),
+  };
+});
+
+import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
+import { getQoderModelConfig, resolveQoderCredentials } from "../../open-sse/services/qoderModels.js";
 import crypto from "crypto";
 
 import { qoderEncodeBody } from "../../src/lib/qoder/encoding.js";
@@ -21,7 +37,14 @@ import {
   QODER_MODEL_MAP,
 } from "../../src/lib/qoder/constants.js";
 import { PROVIDER_MODELS } from "../../open-sse/config/providerModels.js";
-import { __test__ as qoderExecutorInternals } from "../../open-sse/executors/qoder.js";
+import { QoderExecutor, __test__ as qoderExecutorInternals } from "../../open-sse/executors/qoder.js";
+import { canonicalizeQoderUsage } from "../../open-sse/shared/qoder/sse.js";
+import {
+  rewriteQoderMessageAttachments,
+  clearQoderUploadCache,
+  buildMultipartFile,
+} from "../../open-sse/shared/qoder/attachments.js";
+import { qoderInferenceBase } from "../../open-sse/shared/qoder/constants.js";
 
 // Convenience aliases — tests were originally written against module-level
 // helpers; the QoderService class wraps them so each test creates its own
@@ -483,8 +506,96 @@ describe("normalizeMessages", () => {
     ]);
     expect(result.messages[0].content).toBe("hi");
   });
+
+  it("turns leftover file/document blocks into short stubs instead of dropping them", () => {
+    const result = normalizeMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "see" },
+          { type: "file", file: { filename: "big.pdf", file_data: "data:application/pdf;base64,AAA" } },
+        ],
+      },
+    ]);
+    expect(result.messages[0].content).toContain("see");
+    expect(result.messages[0].content).toContain("big.pdf");
+    expect(result.messages[0].content).not.toContain("AAA");
+  });
 });
 
+
+describe("QoderExecutor", () => {
+  const credentials = {
+    apiKey: "pt-personal-token",
+    accessToken: "pt-personal-token",
+    providerSpecificData: { userId: "user-1", machineId: "machine-1" },
+  };
+  const resolvedCredentials = {
+    ...credentials,
+    apiKey: "jt-job-token",
+    accessToken: "jt-job-token",
+  };
+  const modelConfig = {
+    key: "auto",
+    source: "system",
+    is_reasoning: false,
+    max_output_tokens: 1024,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveQoderCredentials.mockResolvedValue(resolvedCredentials);
+    getQoderModelConfig.mockResolvedValue(modelConfig);
+  });
+
+  it("builds the inference URL after PAT resolution", async () => {
+    proxyAwareFetch.mockResolvedValue(new Response("", { status: 200 }));
+    const executor = new QoderExecutor();
+
+    await executor.execute({
+      model: "qoder/auto",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      credentials,
+    });
+
+    expect(resolveQoderCredentials).toHaveBeenCalledWith(credentials, null, undefined);
+    expect(proxyAwareFetch.mock.calls[0][0]).toMatch(/^https:\/\/api2\.qoder\.sh\//);
+  });
+
+  it("emits every usage chunk before one final DONE event", async () => {
+    const finish = JSON.stringify({
+      choices: [{ index: 0, delta: { finish_reason: "stop" } }],
+    });
+    const usage = JSON.stringify({
+      choices: [],
+      usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+    });
+    const body = [
+      `data: ${JSON.stringify({ statusCodeValue: 200, body: finish })}\n\n`,
+      `data: ${JSON.stringify({ statusCodeValue: 200, body: usage })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+    const upstream = new Response(body, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+    proxyAwareFetch.mockResolvedValue(upstream);
+    const executor = new QoderExecutor();
+
+    const result = await executor.execute({
+      model: "qoder/auto",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      credentials,
+    });
+    const output = await result.response.text();
+    const usageIndex = output.indexOf('"prompt_tokens":12');
+    const doneIndex = output.indexOf("data: [DONE]");
+
+    expect(usageIndex).toBeGreaterThanOrEqual(0);
+    expect(doneIndex).toBeGreaterThan(usageIndex);
+    expect((output.match(/data: \[DONE\]/g) || []).length).toBe(1);
+  });
+});
 describe("wrapQoderSSE", () => {
   const { wrapQoderSSE } = qoderExecutorInternals;
 
@@ -600,5 +711,191 @@ describe("wrapQoderSSE", () => {
     const r = new Response("not ok", { status: 500 });
     const wrapped = wrapQoderSSE(r, "qoder/auto");
     expect(wrapped).toBe(r);
+  });
+
+  function envelope(body) {
+    return `data: ${JSON.stringify({ statusCodeValue: 200, body })}\n\n`;
+  }
+
+  function parseForwardedChunks(out) {
+    return out
+      .split("\n\n")
+      .map((block) => block.trim())
+      .filter((block) => block.startsWith("data:") && !block.includes("[DONE]"))
+      .map((block) => JSON.parse(block.slice("data:".length).trim()));
+  }
+
+  it("coalesces empty finish-in-delta + usage-only into one OpenAI usage chunk", async () => {
+    const content = JSON.stringify({
+      id: "chatcmpl-qoder-1",
+      created: 1700000000,
+      model: "auto",
+      choices: [{ index: 0, delta: { content: "hi" } }],
+    });
+    const finish = JSON.stringify({
+      id: "chatcmpl-qoder-1",
+      choices: [{ index: 0, delta: { content: "", finish_reason: "stop" } }],
+    });
+    const usage = JSON.stringify({
+      id: "chatcmpl-qoder-1",
+      choices: [],
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        prompt_tokens_details: { cached_tokens: 40 },
+      },
+    });
+    const wrapped = await wrapQoderSSE(
+      makeResponse([envelope(content) + envelope(finish) + envelope(usage) + envelope("[DONE]")]),
+      "qoder/auto",
+    );
+    const out = await drain(wrapped);
+    expect(out).toContain(`data: ${content}\n\n`);
+    const chunks = parseForwardedChunks(out);
+    const usageChunk = chunks.find((c) => c.usage);
+    expect(usageChunk).toBeDefined();
+    expect(usageChunk.choices[0].finish_reason).toBe("stop");
+    expect(usageChunk.usage.prompt_tokens).toBe(100);
+    expect(usageChunk.usage.completion_tokens).toBe(20);
+    expect(usageChunk.usage.prompt_tokens_details.cached_tokens).toBe(40);
+    expect(chunks.some((c) => Array.isArray(c.choices) && c.choices.length === 0)).toBe(false);
+    expect((out.match(/data: \[DONE\]/g) || []).length).toBe(1);
+  });
+
+  it("maps Qoder input_tokens aliases onto prompt_tokens in the coalesced usage chunk", async () => {
+    const finish = JSON.stringify({
+      choices: [{ index: 0, delta: { finish_reason: "stop" } }],
+    });
+    const usage = JSON.stringify({
+      choices: [],
+      usage: {
+        input_tokens: 80,
+        output_tokens: 10,
+        cache_read_input_tokens: 25,
+      },
+    });
+    const wrapped = await wrapQoderSSE(
+      makeResponse([envelope(finish) + envelope(usage)]),
+      "qoder/lite",
+    );
+    const chunks = parseForwardedChunks(await drain(wrapped));
+    const usageChunk = chunks.find((c) => c.usage);
+    expect(usageChunk.usage.prompt_tokens).toBe(80);
+    expect(usageChunk.usage.completion_tokens).toBe(10);
+    expect(usageChunk.usage.prompt_tokens_details.cached_tokens).toBe(25);
+  });
+});
+
+describe("canonicalizeQoderUsage", () => {
+  it("returns null for missing or empty usage", () => {
+    expect(canonicalizeQoderUsage(null)).toBeNull();
+    expect(canonicalizeQoderUsage({})).toBeNull();
+  });
+
+  it("copies prompt_tokens_details.cached_tokens through", () => {
+    const out = canonicalizeQoderUsage({
+      prompt_tokens: 50,
+      completion_tokens: 5,
+      prompt_tokens_details: { cached_tokens: 12 },
+    });
+    expect(out.prompt_tokens).toBe(50);
+    expect(out.cached_tokens).toBe(12);
+    expect(out.prompt_tokens_details.cached_tokens).toBe(12);
+    expect(out.total_tokens).toBe(55);
+  });
+});
+
+describe("qoderInferenceBase", () => {
+  it("sends job tokens to api2 and device tokens to api3", () => {
+    expect(qoderInferenceBase({ accessToken: "jt-abc" })).toContain("api2.qoder.sh");
+    expect(qoderInferenceBase({ accessToken: "dt-abc" })).toContain("api3.qoder.sh");
+  });
+});
+
+describe("rewriteQoderMessageAttachments", () => {
+  beforeEach(() => clearQoderUploadCache());
+
+  it("uploads data-URI images and keeps only the OSS URL in the message", async () => {
+    const messages = [{
+      role: "user",
+      content: [
+        { type: "text", text: "see this" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      ],
+    }];
+    const stats = await rewriteQoderMessageAttachments(messages, {
+      uploadFn: async ({ buffer, mediaType }) => {
+        expect(Buffer.isBuffer(buffer)).toBe(true);
+        expect(mediaType).toBe("image/png");
+        return "https://cdn.qoder.example/img.png";
+      },
+    });
+    expect(messages[0].content).toEqual([
+      { type: "text", text: "see this" },
+      { type: "image_url", image_url: { url: "https://cdn.qoder.example/img.png" } },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("AAAA");
+    expect(stats.imageUrls).toEqual(["https://cdn.qoder.example/img.png"]);
+  });
+
+  it("does not re-upload already-hosted http(s) image URLs", async () => {
+    const messages = [{
+      role: "user",
+      content: [{ type: "image_url", image_url: { url: "https://example.com/a.png" } }],
+    }];
+    await rewriteQoderMessageAttachments(messages, {
+      uploadFn: async () => {
+        throw new Error("should not upload remote URLs");
+      },
+    });
+    expect(messages[0].content[0].image_url.url).toBe("https://example.com/a.png");
+  });
+
+  it("stubs non-image file blocks instead of inlining bytes", async () => {
+    const pdfB64 = "A".repeat(200);
+    const messages = [{
+      role: "user",
+      content: [
+        { type: "text", text: "read this" },
+        { type: "file", file: { filename: "big.pdf", file_data: `data:application/pdf;base64,${pdfB64}` } },
+      ],
+    }];
+    await rewriteQoderMessageAttachments(messages, {
+      uploadFn: async () => {
+        throw new Error("should not upload PDFs as images");
+      },
+    });
+    const wire = JSON.stringify(messages);
+    expect(wire).not.toContain(pdfB64);
+    expect(wire).toContain("[file omitted: big.pdf");
+  });
+
+  it("stubs oversized images when OSS upload fails instead of keeping a huge data URI", async () => {
+    const big = "A".repeat(700_000);
+    const messages = [{
+      role: "user",
+      content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${big}` } }],
+    }];
+    await rewriteQoderMessageAttachments(messages, {
+      uploadFn: async () => {
+        throw new Error("upstream 413");
+      },
+    });
+    const wire = JSON.stringify(messages);
+    expect(wire).not.toContain(big);
+    expect(wire).toContain("[file omitted:");
+    expect(Buffer.byteLength(wire, "utf8")).toBeLessThan(4096);
+  });
+
+  it("buildMultipartFile uses the file field name qodercli sends", () => {
+    const { boundary, body } = buildMultipartFile(Buffer.from("hi"), {
+      fileName: "image.png",
+      mediaType: "image/png",
+    });
+    const text = body.toString("latin1");
+    expect(text).toContain(`name="file"`);
+    expect(text).toContain("filename=\"image.png\"");
+    expect(text).toContain(`--${boundary}`);
   });
 });

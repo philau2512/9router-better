@@ -18,6 +18,27 @@ function getTierLabel(tier) {
   return tier.name || tier.id || tier.slug || tier.quotaTier || null;
 }
 
+function extractValidationInfo(info) {
+  if (!Array.isArray(info?.ineligibleTiers)) return null;
+  const validationTier = info.ineligibleTiers.find(
+    (tier) =>
+      tier?.validationUrl ||
+      tier?.reasonCode === "VALIDATION_REQUIRED" ||
+      tier?.validationErrorMessage,
+  );
+  if (!validationTier) return null;
+  return {
+    reasonCode: validationTier.reasonCode || "VALIDATION_REQUIRED",
+    message:
+      validationTier.validationErrorMessage ||
+      validationTier.reasonMessage ||
+      "Verify your account to continue.",
+    url: validationTier.validationUrl || null,
+    urlText: validationTier.validationUrlLinkText || "Verify your account",
+    learnMoreUrl: validationTier.validationLearnMoreUrl || null,
+  };
+}
+
 function extractSubscriptionTier(info) {
   const paidTier = getTierLabel(info?.paidTier);
   if (paidTier) return paidTier;
@@ -212,6 +233,7 @@ export async function getAntigravityUsage(
       subscriptionInfo: subscriptionInfo || { cloudaicompanionProject: projectId },
       quotas,
       quotaGroups: await fetchQuotaSummary(accessToken, projectId, proxyOptions),
+      validation: extractValidationInfo(subscriptionInfo),
     };
   } catch (error) {
     console.error("[Antigravity Usage] Error:", error.message, error.cause);
@@ -219,4 +241,4 @@ export async function getAntigravityUsage(
   }
 }
 
-export { extractSubscriptionTier };
+export { extractSubscriptionTier, extractValidationInfo };

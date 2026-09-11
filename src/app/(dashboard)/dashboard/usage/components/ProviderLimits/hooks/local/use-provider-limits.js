@@ -192,6 +192,7 @@ export function useProviderLimits() {
         message: data.message || null,
         // Grok CLI: Enabled/Disabled from onDemandCap (CLIProxyAPI-style row)
         payAsYouGo: data.payAsYouGo || null,
+        validation: data.validation || null,
         raw: data,
       };
 
@@ -537,6 +538,7 @@ export function useProviderLimits() {
             plan: cachedEntry.plan,
             message: cachedEntry.message,
             payAsYouGo: cachedEntry.payAsYouGo || null,
+            validation: cachedEntry.validation || null,
             raw: cachedEntry.raw,
           };
           if (cachedEntry.cachedAt) {

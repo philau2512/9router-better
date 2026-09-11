@@ -378,6 +378,46 @@ export default function ProviderConnectionCard({
         )}
       </div>
 
+      {quota?.validation && (
+        <div className="px-3 pb-2.5">
+          <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-1.5 break-words">
+            <span className="material-symbols-outlined text-[15px] shrink-0 mt-0.5 text-amber-600 dark:text-amber-400">
+              warning
+            </span>
+            <div className="min-w-0 flex-1">
+              <span className="font-semibold block">
+                {quota.validation.message || "Verify your account to continue."}
+              </span>
+              {quota.validation.url && (
+                <div className="mt-1 flex flex-wrap items-center gap-3">
+                  <a
+                    href={quota.validation.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-semibold text-amber-800 hover:text-amber-950 dark:text-amber-200 dark:hover:text-white underline underline-offset-2"
+                  >
+                    <span>{quota.validation.urlText || "Verify your account"}</span>
+                    <span className="material-symbols-outlined text-[13px]">
+                      open_in_new
+                    </span>
+                  </a>
+                  {quota.validation.learnMoreUrl && (
+                    <a
+                      href={quota.validation.learnMoreUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-text-muted hover:text-text-primary text-[11px] underline"
+                    >
+                      Learn more
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {conn.lastError && (
         <div className="px-3 pb-2.5">
           <div className="p-2 rounded-lg bg-red-500/5 border border-red-500/10 text-xs text-red-600 dark:text-red-400 flex items-start gap-1.5 break-words">
