@@ -192,6 +192,19 @@ describe("dashboard guard local-only access", () => {
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
   });
 
+  it("protects Xiaomi auto-import like other local credential routes", async () => {
+    const remote = await proxy(request("/api/oauth/xiaomi-mimo/auto-import", {
+      host: "router.example.com",
+    }));
+    expect(remote.status).toBe(403);
+
+    const local = await proxy(request("/api/oauth/xiaomi-mimo/auto-import", {
+      host: "localhost:20128",
+      origin: "http://localhost:20128",
+    }));
+    expect(local.status).toBe(403);
+  });
+
   it("rejects local-only route from non-loopback host without CLI token", async () => {
     const response = await proxy(
       request("/api/mcp/filesystem/sse", {

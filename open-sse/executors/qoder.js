@@ -458,9 +458,8 @@ async function wrapQoderSSEAsync(response, model) {
 
     const data = trimmed.slice(5).trimStart();
     if (data === "[DONE]") {
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      doneEmitted = true;
       coalescer.flush(controller);
+      doneEmitted = true;
       syncDone();
       return;
     }
@@ -562,9 +561,8 @@ async function wrapQoderSSEAsync(response, model) {
       } finally {
         if (!doneEmitted) {
           try {
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             coalescer.flush(controller);
-            doneEmitted = true;
+            syncDone();
           } catch { /* already closed */ }
         }
         try { controller.close(); } catch { /* already closed */ }
@@ -612,7 +610,7 @@ export class QoderExecutor extends BaseExecutor {
     log,
     proxyOptions = null,
   }) {
-    const url = this.buildUrl();
+    let url;
 
     // PAT (pt-...) credentials are resolved centrally so Qoder model catalog
     // loading and chat execution share the same job-token cache.
@@ -622,7 +620,9 @@ export class QoderExecutor extends BaseExecutor {
         proxyOptions,
         signal,
       );
+      url = this.buildUrl(credentials);
     } catch (err) {
+      url = this.buildUrl(credentials);
       log?.error?.("QODER", `PAT exchange failed: ${err.message}`);
       const fakeResp = new Response(
         JSON.stringify({

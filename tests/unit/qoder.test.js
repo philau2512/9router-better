@@ -9,7 +9,23 @@
  *   - device flow URL construction
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
+  proxyAwareFetch: vi.fn(),
+}));
+
+vi.mock("../../open-sse/services/qoderModels.js", async () => {
+  const actual = await vi.importActual("../../open-sse/services/qoderModels.js");
+  return {
+    ...actual,
+    getQoderModelConfig: vi.fn(),
+    resolveQoderCredentials: vi.fn(),
+  };
+});
+
+import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
+import { getQoderModelConfig, resolveQoderCredentials } from "../../open-sse/services/qoderModels.js";
 import crypto from "crypto";
 
 import { qoderEncodeBody } from "../../src/lib/qoder/encoding.js";
@@ -21,7 +37,7 @@ import {
   QODER_MODEL_MAP,
 } from "../../src/lib/qoder/constants.js";
 import { PROVIDER_MODELS } from "../../open-sse/config/providerModels.js";
-import { __test__ as qoderExecutorInternals } from "../../open-sse/executors/qoder.js";
+import { QoderExecutor, __test__ as qoderExecutorInternals } from "../../open-sse/executors/qoder.js";
 import { canonicalizeQoderUsage } from "../../open-sse/shared/qoder/sse.js";
 import {
   rewriteQoderMessageAttachments,
@@ -507,6 +523,79 @@ describe("normalizeMessages", () => {
   });
 });
 
+
+describe("QoderExecutor", () => {
+  const credentials = {
+    apiKey: "pt-personal-token",
+    accessToken: "pt-personal-token",
+    providerSpecificData: { userId: "user-1", machineId: "machine-1" },
+  };
+  const resolvedCredentials = {
+    ...credentials,
+    apiKey: "jt-job-token",
+    accessToken: "jt-job-token",
+  };
+  const modelConfig = {
+    key: "auto",
+    source: "system",
+    is_reasoning: false,
+    max_output_tokens: 1024,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveQoderCredentials.mockResolvedValue(resolvedCredentials);
+    getQoderModelConfig.mockResolvedValue(modelConfig);
+  });
+
+  it("builds the inference URL after PAT resolution", async () => {
+    proxyAwareFetch.mockResolvedValue(new Response("", { status: 200 }));
+    const executor = new QoderExecutor();
+
+    await executor.execute({
+      model: "qoder/auto",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      credentials,
+    });
+
+    expect(resolveQoderCredentials).toHaveBeenCalledWith(credentials, null, undefined);
+    expect(proxyAwareFetch.mock.calls[0][0]).toMatch(/^https:\/\/api2\.qoder\.sh\//);
+  });
+
+  it("emits every usage chunk before one final DONE event", async () => {
+    const finish = JSON.stringify({
+      choices: [{ index: 0, delta: { finish_reason: "stop" } }],
+    });
+    const usage = JSON.stringify({
+      choices: [],
+      usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+    });
+    const body = [
+      `data: ${JSON.stringify({ statusCodeValue: 200, body: finish })}\n\n`,
+      `data: ${JSON.stringify({ statusCodeValue: 200, body: usage })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+    const upstream = new Response(body, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+    proxyAwareFetch.mockResolvedValue(upstream);
+    const executor = new QoderExecutor();
+
+    const result = await executor.execute({
+      model: "qoder/auto",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      credentials,
+    });
+    const output = await result.response.text();
+    const usageIndex = output.indexOf('"prompt_tokens":12');
+    const doneIndex = output.indexOf("data: [DONE]");
+
+    expect(usageIndex).toBeGreaterThanOrEqual(0);
+    expect(doneIndex).toBeGreaterThan(usageIndex);
+    expect((output.match(/data: \[DONE\]/g) || []).length).toBe(1);
+  });
+});
 describe("wrapQoderSSE", () => {
   const { wrapQoderSSE } = qoderExecutorInternals;
 

@@ -1,5 +1,23 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { fetchPublic } from "@/shared/utils/ssrfGuard";
+
+const DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1";
+const ALLOWED_BASE_ORIGIN = "https://api.xiaomimimo.com";
+
+function normalizeXiaomiBaseUrl(value) {
+  const raw = String(value || DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("Invalid Xiaomi base URL");
+  }
+  if (parsed.origin !== ALLOWED_BASE_ORIGIN || parsed.username || parsed.password) {
+    throw new Error("Untrusted Xiaomi base URL");
+  }
+  return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+}
 
 /**
  * POST /api/oauth/xiaomi-mimo/api-key
@@ -27,13 +45,20 @@ export async function POST(request) {
       );
     }
 
-    const effectiveBaseUrl = (baseUrl || "https://api.xiaomimimo.com/v1").replace(/\/+$/, "");
+    let effectiveBaseUrl;
+    try {
+      effectiveBaseUrl = normalizeXiaomiBaseUrl(baseUrl);
+    } catch (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
 
-    // Validate the key against the models endpoint
+    // Validate the key against the configured Xiaomi models endpoint. The
+    // allowlist above prevents forwarding the bearer key to arbitrary hosts;
+    // fetchPublic also validates DNS and any redirect target.
     let validated = false;
     let modelCount = 0;
     try {
-      const resp = await fetch(`${effectiveBaseUrl}/models`, {
+      const resp = await fetchPublic(`${effectiveBaseUrl}/models`, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${key}`,
