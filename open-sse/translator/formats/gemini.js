@@ -341,12 +341,126 @@ function ensureArrayItems(obj) {
   for (const v of Object.values(obj)) if (v && typeof v === "object") ensureArrayItems(v);
 }
 
+// Dereference internal $ref pointers in JSON Schema (e.g. #/properties/foo, #/$defs/bar, #/definitions/baz)
+function resolveJsonPointer(root, pointer) {
+  if (!pointer || typeof pointer !== "string") return null;
+  if (!pointer.startsWith("#/")) return null;
+  const parts = pointer
+    .slice(2)
+    .split("/")
+    .map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"));
+  let curr = root;
+  for (const part of parts) {
+    if (curr && typeof curr === "object" && part in curr) {
+      curr = curr[part];
+    } else {
+      return null;
+    }
+  }
+  return curr;
+}
+
+function dereferenceSchema(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+
+  function resolveRefs(obj, root, depth = 0) {
+    if (!obj || typeof obj !== "object" || depth > 10) return;
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        if (item && typeof item === "object") {
+          resolveRefs(item, root, depth + 1);
+        }
+      }
+      return;
+    }
+
+    if (typeof obj.$ref === "string") {
+      const target = resolveJsonPointer(root, obj.$ref);
+      if (target && typeof target === "object") {
+        const resolvedTarget = structuredClone(target);
+        resolveRefs(resolvedTarget, root, depth + 1);
+        const { $ref, ...currentOverrides } = obj;
+        delete obj.$ref;
+        Object.assign(obj, resolvedTarget, currentOverrides);
+      }
+    }
+
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (val && typeof val === "object") {
+        resolveRefs(val, root, depth + 1);
+      }
+    }
+  }
+
+  resolveRefs(schema, schema);
+  return schema;
+}
+
+// Ensure all schema properties and array items have a valid type field (Gemini 400 rejection prevention)
+function ensurePropertyTypes(obj) {
+  if (!obj || typeof obj !== "object") return;
+
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      ensurePropertyTypes(item);
+    }
+    return;
+  }
+
+  if (obj.properties && typeof obj.properties === "object") {
+    if (!obj.type) obj.type = "object";
+    for (const propVal of Object.values(obj.properties)) {
+      if (propVal && typeof propVal === "object") {
+        if (!propVal.type) {
+          if (propVal.properties) {
+            propVal.type = "object";
+          } else if (propVal.items) {
+            propVal.type = "array";
+          } else if (propVal.enum) {
+            propVal.type = "string";
+          } else {
+            propVal.type = "string";
+          }
+        }
+        ensurePropertyTypes(propVal);
+      }
+    }
+  }
+
+  if (obj.items && typeof obj.items === "object") {
+    if (!obj.type) obj.type = "array";
+    if (!obj.items.type && !Array.isArray(obj.items)) {
+      if (obj.items.properties) {
+        obj.items.type = "object";
+      } else if (obj.items.items) {
+        obj.items.type = "array";
+      } else if (obj.items.enum) {
+        obj.items.type = "string";
+      } else {
+        obj.items.type = "string";
+      }
+    }
+    ensurePropertyTypes(obj.items);
+  }
+
+  for (const [k, v] of Object.entries(obj)) {
+    if (k !== "properties" && k !== "items" && v && typeof v === "object") {
+      ensurePropertyTypes(v);
+    }
+  }
+}
+
 // Clean JSON Schema for Antigravity API compatibility - removes unsupported keywords recursively
 export function cleanJSONSchemaForAntigravity(schema) {
   if (!schema || typeof schema !== "object") return schema;
 
   // Mutate directly (schema is only used once per request)
   let cleaned = schema;
+
+  // Phase 0: Resolve internal $ref pointers before $defs/definitions/$ref are stripped
+  dereferenceSchema(cleaned);
 
   // Phase 1: Convert and prepare
   convertConstToEnum(cleaned);
@@ -358,9 +472,10 @@ export function cleanJSONSchemaForAntigravity(schema) {
   flattenAnyOfOneOf(cleaned);
   flattenTypeArrays(cleaned);
 
-  // Phase 2.5: Infer missing type=object when properties exist (Gemini requirement)
+  // Phase 2.5: Infer missing type=object / type=array when properties/items exist
   ensureObjectType(cleaned);
   ensureArrayItems(cleaned);
+  ensurePropertyTypes(cleaned);
 
   // Phase 3: Remove all unsupported keywords at ALL levels (including inside arrays)
   removeUnsupportedKeywords(cleaned, UNSUPPORTED_SCHEMA_CONSTRAINTS);
@@ -389,6 +504,9 @@ export function cleanJSONSchemaForAntigravity(schema) {
   }
 
   cleanupRequired(cleaned);
+
+  // Phase 4.5: Re-verify all property types after keyword stripping
+  ensurePropertyTypes(cleaned);
 
   // Phase 5: Add placeholder for empty object schemas (Antigravity requirement)
   function addPlaceholders(obj) {
@@ -432,7 +550,18 @@ export function cleanJSONSchemaForAntigravity(schema) {
   return cleaned;
 }
 
+function contentHasFunctionResponse(content) {
+  return (content?.parts || []).some((p) => p?.functionResponse);
+}
+
+function contentHasPlainText(content) {
+  return (content?.parts || []).some(
+    (p) => typeof p?.text === "string" && p.text.length > 0,
+  );
+}
+
 // Merge adjacent same-role messages, strip empty parts, ensure initial user turn
+// Do NOT merge functionResponse turns with follow-up user text — that shape triggers 400 INVALID_ARGUMENT on Gemini/Antigravity.
 export function normalizeGeminiContents(contents) {
   const out = [];
   for (const c of contents || []) {
@@ -440,11 +569,28 @@ export function normalizeGeminiContents(contents) {
     const parts = c.parts.filter(p => p && Object.keys(p).length > 0);
     if (parts.length === 0) continue;
     const last = out.at(-1);
-    if (last?.role === c.role) last.parts.push(...parts);
-    else out.push({ ...c, parts: [...parts] });
+    if (last?.role === c.role) {
+      const mixedFrAndText =
+        (contentHasFunctionResponse(last) && contentHasPlainText(c)) ||
+        (contentHasPlainText(last) && contentHasFunctionResponse(c));
+      if (!mixedFrAndText) {
+        last.parts.push(...parts);
+        continue;
+      }
+      // If we cannot merge because one is functionResponse and one is text,
+      // insert a synthetic bridge turn to preserve strict alternating roles (user -> model -> user).
+      // Consecutive same-role turns trigger 400 INVALID_ARGUMENT on Gemini/Antigravity API.
+      if (c.role === "user") {
+        out.push({ role: "model", parts: [{ text: "..." }] });
+      } else if (c.role === "model") {
+        out.push({ role: "user", parts: [{ text: "..." }] });
+      }
+    }
+    out.push({ ...c, parts: [...parts] });
   }
   if (out.length > 0 && out[0].role !== "user") {
     out.unshift({ role: "user", parts: [{ text: "..." }] });
   }
   return out;
 }
+
