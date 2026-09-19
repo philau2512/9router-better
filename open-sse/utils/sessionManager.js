@@ -136,7 +136,11 @@ function extractAntigravitySession(body) {
 }
 
 function extractClientSessionId(headers, body, scope = "") {
-    // Claude Code sends the session in a header AND in metadata.user_id; the header
+    // 1. Explicit body prompt_cache_key has top priority for prompt caching
+    const explicitPromptCacheKey = normalizeSessionId(body?.prompt_cache_key);
+    if (explicitPromptCacheKey) return explicitPromptCacheKey;
+
+    // 2. Claude Code sends the session in a header AND in metadata.user_id; the header
     // survives translation to formats that drop metadata (e.g. Responses API).
     const claude = extractClaudeCodeSession(body?.metadata?.user_id)
         || headerValue(headers, CLAUDE_CODE_SESSION_HEADER);
@@ -147,14 +151,18 @@ function extractClientSessionId(headers, body, scope = "") {
         const v = headerValue(headers, key);
         if (v) return v;
     }
+    // 3. Explicit session/conversation IDs in request body
+    const fromBody =
+        normalizeSessionId(body?.session_id) ||
+        normalizeSessionId(body?.conversation_id);
+    if (fromBody) return fromBody;
+
+    // 4. Request-scoped header fallback (skipped for kiro where it's non-session)
     const requestId = scope === "kiro" ? null : headerValue(headers, "x-client-request-id");
     if (requestId) return requestId;
-    const fromBody =
-        normalizeSessionId(body?.prompt_cache_key) ||
-        normalizeSessionId(body?.session_id) ||
-        normalizeSessionId(body?.conversation_id) ||
-        (scope === "kiro" ? null : normalizeSessionId(body?.metadata?.user_id));
-    return fromBody || null;
+
+    const userMetadata = scope === "kiro" ? null : normalizeSessionId(body?.metadata?.user_id);
+    return userMetadata || null;
 }
 
 function requestMessages(body) {

@@ -163,10 +163,18 @@ export function generateSessionId() {
   return crypto.randomUUID() + Date.now().toString();
 }
 
-// Generate project ID
-export function generateProjectId() {
+// Generate project ID (deterministic if seed provided, e.g. connectionId or email)
+export function generateProjectId(seed = "") {
   const adjectives = ["useful", "bright", "swift", "calm", "bold"];
   const nouns = ["fuze", "wave", "spark", "flow", "core"];
+  if (seed) {
+    const hash = crypto.createHash("sha256").update(String(seed)).digest("hex");
+    const num1 = parseInt(hash.slice(0, 4), 16);
+    const num2 = parseInt(hash.slice(4, 8), 16);
+    const adj = adjectives[num1 % adjectives.length];
+    const noun = nouns[num2 % nouns.length];
+    return `${adj}-${noun}-${hash.slice(8, 13)}`;
+  }
   const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
   const noun = nouns[Math.floor(Math.random() * nouns.length)];
   return `${adj}-${noun}-${crypto.randomUUID().slice(0, 5)}`;

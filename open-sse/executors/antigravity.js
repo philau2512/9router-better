@@ -167,7 +167,8 @@ export class AntigravityExecutor extends BaseExecutor {
 
   transformRequest(model, body, stream, credentials) {
     body = structuredClone(body);
-    const projectId = credentials?.projectId || this.generateProjectId();
+    const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+    const projectId = credentials?.projectId || this.generateProjectId(seed);
 
     // OpenAI clients may include stream_options even for non-streaming calls.
     // Google generateContent rejects that combination before processing the request.
@@ -425,14 +426,18 @@ export class AntigravityExecutor extends BaseExecutor {
     }
   }
 
-  generateProjectId() {
-    const adj = ["useful", "bright", "swift", "calm", "bold"][
-      Math.floor(Math.random() * 5)
-    ];
-    const noun = ["fuze", "wave", "spark", "flow", "core"][
-      Math.floor(Math.random() * 5)
-    ];
-    return `${adj}-${noun}-${crypto.randomUUID().slice(0, 5)}`;
+  generateProjectId(seed = "") {
+    const adj = ["useful", "bright", "swift", "calm", "bold"];
+    const noun = ["fuze", "wave", "spark", "flow", "core"];
+    if (seed) {
+      const hash = crypto.createHash("sha256").update(String(seed)).digest("hex");
+      const num1 = parseInt(hash.slice(0, 4), 16);
+      const num2 = parseInt(hash.slice(4, 8), 16);
+      return `${adj[num1 % adj.length]}-${noun[num2 % noun.length]}-${hash.slice(8, 13)}`;
+    }
+    const a = adj[Math.floor(Math.random() * adj.length)];
+    const n = noun[Math.floor(Math.random() * noun.length)];
+    return `${a}-${n}-${crypto.randomUUID().slice(0, 5)}`;
   }
 
   generateSessionId() {

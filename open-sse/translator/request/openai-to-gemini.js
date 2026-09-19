@@ -449,7 +449,8 @@ function wrapInCloudCodeEnvelope(
   credentials = null,
   isAntigravity = false,
 ) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+  const projectId = credentials?.projectId || generateProjectId(seed);
 
   const envelope = {
     project: projectId,
@@ -506,7 +507,8 @@ function wrapInCloudCodeEnvelopeForClaude(
   claudeRequest,
   credentials = null,
 ) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+  const projectId = credentials?.projectId || generateProjectId(seed);
 
   const envelope = {
     project: projectId,
