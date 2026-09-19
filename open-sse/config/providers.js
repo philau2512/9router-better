@@ -445,6 +445,10 @@ export const PROVIDERS = {
     format: "openai",
     headers: { "x-opencode-client": "desktop" },
     noAuth: true,
+    forceStream: true,
+    quirks: {
+      forceAutoToolChoiceModels: ["muse-spark-1.3-contributor-free"],
+    },
   },
   "opencode-go": {
     baseUrl: "https://opencode.ai/zen/go/v1/chat/completions",

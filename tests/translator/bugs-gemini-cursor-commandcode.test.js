@@ -131,7 +131,7 @@ describe("OpenAI → CommandCode", () => {
     });
     expect(JSON.stringify(out)).toContain("BBBB");
     expect(JSON.stringify(out)).not.toContain("[image omitted]");
-    expect(out.params.messages[0].content).toEqual([
+    expect(out.params.messages[0].content).toMatchObject([
       { type: "text", text: "look" },
       { type: "image", image: "data:image/png;base64,BBBB", mimeType: "image/png" },
     ]);

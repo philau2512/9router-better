@@ -545,6 +545,12 @@ export function pipeWithDisconnect(
   // provider in byte mode and rebuilds a byte transform.
   bodyOverride = null,
 ) {
+  // Handle overloaded signature: pipeWithDisconnect(res, transform, ctrl, onAbortTerminal, stallTimeoutMs)
+  if (typeof streamStateTracker === "number") {
+    stallTimeoutMs = streamStateTracker;
+    streamStateTracker = null;
+  }
+
   let stallTimer = null;
   let semanticStallTimer = null;
   let lastContentLength = 0;

@@ -6,6 +6,7 @@ import { effortToBudget, budgetToLevel } from "../concerns/thinking.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import { systemReminderText } from "../helpers/claudeHelper.js";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.js";
+import { encodeDataUri } from "../concerns/image.js";
 
 function stripAnthropicBillingHeader(text) {
   if (typeof text !== "string") return "";

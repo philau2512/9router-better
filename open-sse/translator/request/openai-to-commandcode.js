@@ -233,4 +233,6 @@ export function openaiToCommandCode(model, body, stream /* , credentials */) {
   };
 }
 
+export const openaiToCommandCodeRequest = openaiToCommandCode;
+
 register(FORMATS.OPENAI, FORMATS.COMMANDCODE, openaiToCommandCode, null);

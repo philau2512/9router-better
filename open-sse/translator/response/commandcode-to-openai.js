@@ -205,13 +205,11 @@ export function convertCommandCodeToOpenAI(chunk, state) {
       break;
     }
     case "error": {
-    case "error": {
       const errVal = event.error ?? event.message ?? "unknown";
       const errStr = typeof errVal === "string" ? errVal : JSON.stringify(errVal);
       // Mid-stream error: throw rather than emitting as fake content with finish_reason: "stop"
       // This ensures the downstream stream handler marks the stream as errored/aborted.
       throw new Error(`[CommandCode error: ${errStr}]`);
-    }
     }
     // Silently ignore: start, start-step, reasoning-start, reasoning-end, text-start, text-end,
     // provider-metadata, message-metadata, etc. They carry no client-visible content.

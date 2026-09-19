@@ -560,7 +560,7 @@ function wrapInCloudCodeEnvelopeForClaude(
               : null;
             const thoughtSignature =
               cachedSignature ||
-              (!firstToolUseSeen ? (signature || DEFAULT_THINKING_AG_SIGNATURE) : undefined);
+              (!firstToolUseSeen ? DEFAULT_THINKING_AG_SIGNATURE : undefined);
             firstToolUseSeen = true;
             const part = {
               functionCall: {
