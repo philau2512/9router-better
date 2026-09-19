@@ -220,18 +220,27 @@ Keep provider-specific behavior at its existing seam:
   the executor.
 - **Antigravity:** `open-sse/executors/antigravity.js` contains output-token and
   signed-thought continuation safeguards; its supporting persisted signatures
-  are in `open-sse/services/thoughtSignatureStore.js`. Schema dereferencing & type
+  are in `open-sse/services/thoughtSignatureStore.js` and must be scoped by model
+  family (`body.model || model`) to avoid cross-family replay. Schema dereferencing & type
   enforcement live in `open-sse/translator/helpers/geminiHelper.js` / `formats/gemini.js`.
   Response translation must stay aligned with `open-sse/translator/response/gemini-to-openai.js`.
 - **Kiro:** `open-sse/executors/kiro.js` owns binary EventStream decoding and
-  split thinking-tag buffering. Do not move this behavior into a generic text
-  translator.
+  split thinking-tag buffering. Tool names preserve underscores (`mcp__server__tool`)
+  and restore original names via `_toolNameMap` in `restoreToolName()`.
+- **Stream In-band Abort & Disconnect:** `open-sse/utils/streamHandler.js` (`pipeWithDisconnect`)
+  and `streamingHandler.js` deliver structured in-band terminal SSE error frames (`onAbortTerminal`)
+  when a stream aborts or times out after HTTP 200 has been sent, while keeping the fork's
+  `streamStateTracker`, TTFT/timing markers, and mid-stream auto-resume watchdogs intact.
 - **Qoder:** resolve PAT, OAuth refresh, and credential normalization only via
   `resolveQoderCredentials()` in `open-sse/services/qoderModels.js`. Executors
   and usage services must not recreate local PAT/job-token flows.
 - **OpenAI Responses:** keep the unique output-index allocator synchronized in
   `open-sse/transformer/responsesTransformer.js` and
   `open-sse/translator/response/openai-responses.js`.
+- **Modular Constants Architecture:** `src/shared/constants/providers.js` is a barrel
+  re-export over `src/shared/constants/providers/`. When upstream adds new usage-tracked
+  providers or auth categories (e.g. `commandcode` in `USAGE_SUPPORTED_PROVIDERS`), add them
+  to the respective sub-module (`usage-constants.js`, etc.) instead of overwriting the barrel.
 
 For translator updates, retain the pipeline `source -> openai -> target` and
 `target -> openai -> source`; prefer an already-registered direct route for
