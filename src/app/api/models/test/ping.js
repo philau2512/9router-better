@@ -224,7 +224,7 @@ export async function pingModelByKind(
     return {
       ok: false,
       latencyMs,
-      error: `HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 240)}` : ""}`,
+      error: `HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 500)}` : ""}`,
       status: res.status,
     };
   }

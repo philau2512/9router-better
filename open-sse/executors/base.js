@@ -219,7 +219,13 @@ export class BaseExecutor {
         stream,
         credentials,
       );
-      const headers = this.buildHeaders(credentials, stream, url);
+      const headers = this.buildHeaders(
+        credentials,
+        stream,
+        url,
+        model,
+        transformedBody,
+      );
 
       if (!retryAttemptsByUrl[urlIndex]) retryAttemptsByUrl[urlIndex] = 0;
 

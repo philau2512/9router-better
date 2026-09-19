@@ -247,7 +247,7 @@ export class AntigravityExecutor extends BaseExecutor {
         if (part.functionCall) {
           const callId = part.functionCall.id;
           const cachedSignature = callId
-            ? getGeminiThoughtSignatureSync(callId, sessionId)
+            ? getGeminiThoughtSignatureSync(callId, sessionId, body.model || model)
             : null;
           const thoughtSignature =
             part.thoughtSignature ||

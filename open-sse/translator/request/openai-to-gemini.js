@@ -239,7 +239,7 @@ function openaiToGeminiBase(
             const sanitizedName = sanitizeGeminiFunctionName(fnName);
             const args = tryParseJSON(tc.function?.arguments || "{}");
             const cachedSignature = tc.id
-              ? getGeminiThoughtSignatureSync(tc.id, sessionId)
+              ? getGeminiThoughtSignatureSync(tc.id, sessionId, model)
               : null;
             const callSignature =
               resolveThoughtSignature(tc, cachedSignature) ||
@@ -550,16 +550,17 @@ function wrapInCloudCodeEnvelopeForClaude(
         for (const block of msg.content) {
           if (block.type === "text") {
             parts.push({ text: block.text });
-          } else if (block.type === "tool_use") {
+          } else if (block.type === CLAUDE_BLOCK.TOOL_USE) {
             const cachedSignature = block.id
               ? getGeminiThoughtSignatureSync(
                   block.id,
                   credentials?._clientSessionId,
+                  model,
                 )
               : null;
             const thoughtSignature =
               cachedSignature ||
-              (!firstToolUseSeen ? DEFAULT_THINKING_AG_SIGNATURE : undefined);
+              (!firstToolUseSeen ? (signature || DEFAULT_THINKING_AG_SIGNATURE) : undefined);
             firstToolUseSeen = true;
             const part = {
               functionCall: {
