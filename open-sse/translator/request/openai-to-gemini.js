@@ -101,17 +101,27 @@ function normalizeGeminiContents(contents) {
   const out = [];
   for (const c of contents || []) {
     if (!c?.role || !Array.isArray(c.parts) || c.parts.length === 0) continue;
+    const parts = c.parts.filter((p) => p && Object.keys(p).length > 0);
+    if (parts.length === 0) continue;
     const last = out.at(-1);
     if (last?.role === c.role) {
       const mixedFrAndText =
         (contentHasFunctionResponse(last) && contentHasPlainText(c)) ||
         (contentHasPlainText(last) && contentHasFunctionResponse(c));
       if (!mixedFrAndText) {
-        last.parts.push(...c.parts);
+        last.parts.push(...parts);
         continue;
       }
+      // If we cannot merge because one is functionResponse and one is text,
+      // insert a synthetic bridge turn to preserve strict alternating roles (user -> model -> user).
+      // Consecutive same-role turns trigger 400 INVALID_ARGUMENT on Gemini/Antigravity API.
+      if (c.role === "user") {
+        out.push({ role: "model", parts: [{ text: "..." }] });
+      } else if (c.role === "model") {
+        out.push({ role: "user", parts: [{ text: "..." }] });
+      }
     }
-    out.push({ ...c, parts: [...c.parts] });
+    out.push({ ...c, parts: [...parts] });
   }
   return out;
 }
@@ -220,14 +230,16 @@ function openaiToGeminiBase(
         }
 
         if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
-          const toolCallIds = [];
+          const toolCallsList = [];
           let firstFunctionCallSeen = false;
           for (const tc of msg.tool_calls) {
             if (tc.type !== "function") continue;
 
+            const fnName = tc.function?.name || "";
+            const sanitizedName = sanitizeGeminiFunctionName(fnName);
             const args = tryParseJSON(tc.function?.arguments || "{}");
             const cachedSignature = tc.id
-              ? getGeminiThoughtSignatureSync(tc.id, sessionId)
+              ? getGeminiThoughtSignatureSync(tc.id, sessionId, model)
               : null;
             const callSignature =
               resolveThoughtSignature(tc, cachedSignature) ||
@@ -236,40 +248,49 @@ function openaiToGeminiBase(
             const part = {
               functionCall: {
                 id: tc.id,
-                name: sanitizeGeminiFunctionName(tc.function.name),
+                name: sanitizedName,
                 args,
               },
             };
             if (callSignature) part.thoughtSignature = callSignature;
             parts.push(part);
-            toolCallIds.push(tc.id);
+            toolCallsList.push({ id: tc.id, name: sanitizedName });
           }
 
           if (parts.length > 0) {
             result.contents.push({ role: "model", parts });
           }
 
+          // Gather tool response messages immediately following this assistant message
+          const localToolResponses = {};
+          let nextIdx = i + 1;
+          while (
+            nextIdx < body.messages.length &&
+            body.messages[nextIdx]?.role === "tool"
+          ) {
+            const toolMsg = body.messages[nextIdx];
+            if (toolMsg.tool_call_id) {
+              localToolResponses[toolMsg.tool_call_id] = toolMsg.content;
+            }
+            nextIdx++;
+          }
+
           // Check if there are actual tool responses in the next messages
-          const hasActualResponses = toolCallIds.some(
-            (fid) => toolResponses[fid] !== undefined,
+          const hasActualResponses = toolCallsList.some(
+            (tc) =>
+              localToolResponses[tc.id] !== undefined ||
+              toolResponses[tc.id] !== undefined,
           );
           const isIntermediate = i < body.messages.length - 1;
 
           if (hasActualResponses || isIntermediate) {
             const toolParts = [];
-            for (const fid of toolCallIds) {
-              let resp = toolResponses[fid];
+            for (const tc of toolCallsList) {
+              let resp =
+                localToolResponses[tc.id] !== undefined
+                  ? localToolResponses[tc.id]
+                  : toolResponses[tc.id];
               if (resp === undefined) resp = "";
-
-              let name = tcID2Name[fid];
-              if (!name) {
-                const idParts = fid.split("-");
-                if (idParts.length > 2) {
-                  name = idParts.slice(0, -2).join("-");
-                } else {
-                  name = fid;
-                }
-              }
 
               let parsedResp = tryParseJSON(resp);
               if (parsedResp === null) {
@@ -280,8 +301,8 @@ function openaiToGeminiBase(
 
               toolParts.push({
                 functionResponse: {
-                  id: fid,
-                  name: sanitizeGeminiFunctionName(name),
+                  id: tc.id,
+                  name: tc.name,
                   response: { result: sanitizeFunctionResponseData(parsedResp) },
                 },
               });
@@ -428,7 +449,8 @@ function wrapInCloudCodeEnvelope(
   credentials = null,
   isAntigravity = false,
 ) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+  const projectId = credentials?.projectId || generateProjectId(seed);
 
   const envelope = {
     project: projectId,
@@ -485,7 +507,8 @@ function wrapInCloudCodeEnvelopeForClaude(
   claudeRequest,
   credentials = null,
 ) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+  const projectId = credentials?.projectId || generateProjectId(seed);
 
   const envelope = {
     project: projectId,
@@ -529,11 +552,12 @@ function wrapInCloudCodeEnvelopeForClaude(
         for (const block of msg.content) {
           if (block.type === "text") {
             parts.push({ text: block.text });
-          } else if (block.type === "tool_use") {
+          } else if (block.type === CLAUDE_BLOCK.TOOL_USE) {
             const cachedSignature = block.id
               ? getGeminiThoughtSignatureSync(
                   block.id,
                   credentials?._clientSessionId,
+                  model,
                 )
               : null;
             const thoughtSignature =

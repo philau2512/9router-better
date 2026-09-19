@@ -4,19 +4,56 @@
  */
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
+import { ROLE, OPENAI_BLOCK } from "../schema/index.js";
+import { buildChunk } from "../concerns/chunk.js";
+import { toOpenAIUsage } from "../concerns/usage.js";
+import { fallbackToolCallId } from "../concerns/toolCall.js";
+import { reasoningDelta } from "../concerns/reasoning.js";
+import { toOpenAIFinish } from "../concerns/finishReason.js";
+
+// Build chunk meta for current kiro state
+function chunkMeta(state) {
+  return { id: state.responseId, created: state.created, model: state.model || "kiro" };
+}
 
 /**
  * Parse Kiro SSE event and convert to OpenAI format
  * Kiro events: assistantResponseEvent, codeEvent, supplementaryWebLinksEvent, etc.
  */
-export function convertKiroToOpenAI(chunk, state) {
+// Kiro only accepts sanitized tool names; the request translator leaves the
+// reverse map on the stream state so calls come back under the client's names.
+function restoreToolName(state, name) {
+  const raw = name || "";
+  const map = state?.toolNameMap;
+  return map && typeof map.get === "function" && map.has(raw) ? map.get(raw) : raw;
+}
+
+export function kiroToOpenAIResponse(chunk, state) {
+  
   if (!chunk) return null;
 
-  // If chunk is already in OpenAI format (from executor transform), return as-is
+  // If chunk is already in OpenAI format (from executor transform), return it
+  // with the client's tool names restored.
   if (chunk.object === "chat.completion.chunk" && chunk.choices) {
-    return chunk;
+    if (!state?.toolNameMap?.size) return chunk;
+    return {
+      ...chunk,
+      choices: chunk.choices.map((choice) => {
+        const calls = choice?.delta?.tool_calls;
+        if (!Array.isArray(calls)) return choice;
+        return {
+          ...choice,
+          delta: {
+            ...choice.delta,
+            tool_calls: calls.map((tc) => tc?.function?.name
+              ? { ...tc, function: { ...tc.function, name: restoreToolName(state, tc.function.name) } }
+              : tc),
+          },
+        };
+      }),
+    };
   }
-
+  
   // Handle string chunk (raw SSE data)
   let data = chunk;
   if (typeof chunk === "string") {
@@ -65,22 +102,10 @@ export function convertKiroToOpenAI(chunk, state) {
     const content = data.assistantResponseEvent?.content || data.content || "";
     if (!content) return null;
 
-    const openaiChunk = {
-      id: state.responseId,
-      object: "chat.completion.chunk",
-      created: state.created,
-      model: state.model || "kiro",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            ...(state.chunkIndex === 0 ? { role: "assistant" } : {}),
-            content: content,
-          },
-          finish_reason: null,
-        },
-      ],
-    };
+    const openaiChunk = buildChunk(chunkMeta(state), {
+      ...(state.chunkIndex === 0 ? { role: ROLE.ASSISTANT } : {}),
+      content: content
+    }, null);
 
     state.chunkIndex++;
     return openaiChunk;
@@ -93,28 +118,12 @@ export function convertKiroToOpenAI(chunk, state) {
   // it to Claude thinking blocks / Anthropic reasoning / etc.
   if (eventType === "reasoningContentEvent" || data.reasoningContentEvent) {
     const reasoning = data.reasoningContentEvent || data;
-    const content =
-      typeof reasoning === "string"
-        ? reasoning
-        : reasoning.text || reasoning.content || data.content || "";
+    const content = (typeof reasoning === "string")
+      ? reasoning
+      : (reasoning.text || reasoning.content || data.content || "");
     if (!content) return null;
 
-    const openaiChunk = {
-      id: state.responseId,
-      object: "chat.completion.chunk",
-      created: state.created,
-      model: state.model || "kiro",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            ...(state.chunkIndex === 0 ? { role: "assistant" } : {}),
-            reasoning_content: content,
-          },
-          finish_reason: null,
-        },
-      ],
-    };
+    const openaiChunk = buildChunk(chunkMeta(state), reasoningDelta(content, state.chunkIndex === 0), null);
 
     state.chunkIndex++;
     return openaiChunk;
@@ -122,66 +131,36 @@ export function convertKiroToOpenAI(chunk, state) {
 
   // Handle tool use events
   if (eventType === "toolUseEvent" || data.toolUseEvent) {
+    state.hadToolUse = true;
     const toolUse = data.toolUseEvent || data;
-    const toolCallId = toolUse.toolUseId || `call_${Date.now()}`;
-    const rawToolName = toolUse.name || "";
-    // Restore the client's original tool name if it was sanitized on the way
-    // up (fail-open: names not in the map pass through unchanged).
-    const toolName = state.toolNameMap?.get(rawToolName) || rawToolName;
+    const toolCallId = toolUse.toolUseId || fallbackToolCallId();
+    const toolName = restoreToolName(state, toolUse.name);
     const toolInput = toolUse.input || {};
 
-    const openaiChunk = {
-      id: state.responseId,
-      object: "chat.completion.chunk",
-      created: state.created,
-      model: state.model || "kiro",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            ...(state.chunkIndex === 0 ? { role: "assistant" } : {}),
-            tool_calls: [
-              {
-                index: 0,
-                id: toolCallId,
-                type: "function",
-                function: {
-                  name: toolName,
-                  arguments: JSON.stringify(toolInput),
-                },
-              },
-            ],
-          },
-          finish_reason: null,
-        },
-      ],
-    };
+    const openaiChunk = buildChunk(chunkMeta(state), {
+      ...(state.chunkIndex === 0 ? { role: ROLE.ASSISTANT } : {}),
+      tool_calls: [{
+        index: 0,
+        id: toolCallId,
+        type: OPENAI_BLOCK.FUNCTION,
+        function: {
+          name: toolName,
+          arguments: JSON.stringify(toolInput)
+        }
+      }]
+    }, null);
 
     state.chunkIndex++;
     return openaiChunk;
   }
 
   // Handle completion/done events
-  if (
-    eventType === "messageStopEvent" ||
-    eventType === "done" ||
-    data.messageStopEvent
-  ) {
-    state.finishReason = "stop"; // Mark for usage injection in stream.js
+  if (eventType === "messageStopEvent" || eventType === "done" || data.messageStopEvent) {
+    // tool_calls when a tool was used this turn, else stop (kiro upstream has no explicit reason)
+    const finishReason = toOpenAIFinish(state.hadToolUse ? "tool_use" : "stop", "kiro");
+    state.finishReason = finishReason; // Mark for usage injection in stream.js
 
-    const openaiChunk = {
-      id: state.responseId,
-      object: "chat.completion.chunk",
-      created: state.created,
-      model: state.model || "kiro",
-      choices: [
-        {
-          index: 0,
-          delta: {},
-          finish_reason: "stop",
-        },
-      ],
-    };
+    const openaiChunk = buildChunk(chunkMeta(state), {}, finishReason);
 
     // Include usage in final chunk if available
     if (state.usage && typeof state.usage === "object") {
@@ -191,30 +170,10 @@ export function convertKiroToOpenAI(chunk, state) {
     return openaiChunk;
   }
 
-  // Handle usage events
+// Handle usage events
   if (eventType === "usageEvent" || data.usageEvent) {
-    const usage = data.usageEvent || data;
-    if (usage && typeof usage === "object") {
-      const input = usage.inputTokens || 0;
-      const output = usage.outputTokens || 0;
-      // Kiro is Claude-backed: inputTokens EXCLUDES cache (Claude convention).
-      // Emit cache_read_input_tokens (not cached_tokens) so canonicalizeUsage
-      // takes the Claude fold path and adds cache back into prompt total.
-      const cacheRead =
-        usage.cacheReadInputTokens || usage.cache_read_input_tokens || 0;
-      const cacheCreation =
-        usage.cacheCreationInputTokens ||
-        usage.cache_creation_input_tokens ||
-        0;
-      state.usage = {
-        prompt_tokens: input,
-        completion_tokens: output,
-        total_tokens: input + output,
-      };
-      if (cacheRead > 0) state.usage.cache_read_input_tokens = cacheRead;
-      if (cacheCreation > 0)
-        state.usage.cache_creation_input_tokens = cacheCreation;
-    }
+    const usage = toOpenAIUsage(data.usageEvent || data, "kiro");
+    if (usage) state.usage = usage;
     return null;
   }
 
@@ -222,5 +181,7 @@ export function convertKiroToOpenAI(chunk, state) {
   return null;
 }
 
+export const convertKiroToOpenAI = kiroToOpenAIResponse;
+
 // Register translator
-register(FORMATS.KIRO, FORMATS.OPENAI, null, convertKiroToOpenAI);
+register(FORMATS.KIRO, FORMATS.OPENAI, null, kiroToOpenAIResponse);

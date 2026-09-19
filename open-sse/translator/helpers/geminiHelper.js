@@ -163,10 +163,18 @@ export function generateSessionId() {
   return crypto.randomUUID() + Date.now().toString();
 }
 
-// Generate project ID
-export function generateProjectId() {
+// Generate project ID (deterministic if seed provided, e.g. connectionId or email)
+export function generateProjectId(seed = "") {
   const adjectives = ["useful", "bright", "swift", "calm", "bold"];
   const nouns = ["fuze", "wave", "spark", "flow", "core"];
+  if (seed) {
+    const hash = crypto.createHash("sha256").update(String(seed)).digest("hex");
+    const num1 = parseInt(hash.slice(0, 4), 16);
+    const num2 = parseInt(hash.slice(4, 8), 16);
+    const adj = adjectives[num1 % adjectives.length];
+    const noun = nouns[num2 % nouns.length];
+    return `${adj}-${noun}-${hash.slice(8, 13)}`;
+  }
   const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
   const noun = nouns[Math.floor(Math.random() * nouns.length)];
   return `${adj}-${noun}-${crypto.randomUUID().slice(0, 5)}`;
@@ -342,6 +350,146 @@ function flattenTypeArrays(obj) {
   }
 }
 
+// Dereference internal $ref pointers in JSON Schema (e.g. #/properties/foo, #/$defs/bar, #/definitions/baz)
+function resolveJsonPointer(root, pointer) {
+  if (!pointer || typeof pointer !== "string") return null;
+  if (!pointer.startsWith("#/")) return null;
+  const parts = pointer
+    .slice(2)
+    .split("/")
+    .map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"));
+  let curr = root;
+  for (const part of parts) {
+    if (curr && typeof curr === "object" && part in curr) {
+      curr = curr[part];
+    } else {
+      return null;
+    }
+  }
+  return curr;
+}
+
+function dereferenceSchema(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+
+  function resolveRefs(obj, root, depth = 0) {
+    if (!obj || typeof obj !== "object" || depth > 10) return;
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        if (item && typeof item === "object") {
+          resolveRefs(item, root, depth + 1);
+        }
+      }
+      return;
+    }
+
+    if (typeof obj.$ref === "string") {
+      const target = resolveJsonPointer(root, obj.$ref);
+      if (target && typeof target === "object") {
+        const resolvedTarget = structuredClone(target);
+        resolveRefs(resolvedTarget, root, depth + 1);
+        const { $ref, ...currentOverrides } = obj;
+        delete obj.$ref;
+        Object.assign(obj, resolvedTarget, currentOverrides);
+      }
+    }
+
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (val && typeof val === "object") {
+        resolveRefs(val, root, depth + 1);
+      }
+    }
+  }
+
+  resolveRefs(schema, schema);
+  return schema;
+}
+
+// Convert draft 2020-12 prefixItems to items
+function convertPrefixItems(obj) {
+  if (!obj || typeof obj !== "object") return;
+
+  if (obj.prefixItems && Array.isArray(obj.prefixItems)) {
+    if (!obj.items) {
+      obj.items = obj.prefixItems[0] || { type: "string" };
+    }
+    delete obj.prefixItems;
+  }
+
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === "object") {
+      convertPrefixItems(value);
+    }
+  }
+}
+
+// Gemini requires items on every type:"array" schema — fill a permissive placeholder
+function ensureArrayItems(obj) {
+  if (!obj || typeof obj !== "object") return;
+  if (obj.type === "array" && !obj.items) {
+    obj.items = { type: "string" };
+  }
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === "object") ensureArrayItems(v);
+  }
+}
+
+// Ensure all schema properties and array items have a valid type field (Gemini 400 rejection prevention)
+function ensurePropertyTypes(obj) {
+  if (!obj || typeof obj !== "object") return;
+
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      ensurePropertyTypes(item);
+    }
+    return;
+  }
+
+  if (obj.properties && typeof obj.properties === "object") {
+    if (!obj.type) obj.type = "object";
+    for (const propVal of Object.values(obj.properties)) {
+      if (propVal && typeof propVal === "object") {
+        if (!propVal.type) {
+          if (propVal.properties) {
+            propVal.type = "object";
+          } else if (propVal.items) {
+            propVal.type = "array";
+          } else if (propVal.enum) {
+            propVal.type = "string";
+          } else {
+            propVal.type = "string";
+          }
+        }
+        ensurePropertyTypes(propVal);
+      }
+    }
+  }
+
+  if (obj.items && typeof obj.items === "object") {
+    if (!obj.type) obj.type = "array";
+    if (!obj.items.type && !Array.isArray(obj.items)) {
+      if (obj.items.properties) {
+        obj.items.type = "object";
+      } else if (obj.items.items) {
+        obj.items.type = "array";
+      } else if (obj.items.enum) {
+        obj.items.type = "string";
+      } else {
+        obj.items.type = "string";
+      }
+    }
+    ensurePropertyTypes(obj.items);
+  }
+
+  for (const [k, v] of Object.entries(obj)) {
+    if (k !== "properties" && k !== "items" && v && typeof v === "object") {
+      ensurePropertyTypes(v);
+    }
+  }
+}
+
 // Infer missing type=object when properties exist (Gemini requires explicit type)
 function ensureObjectType(obj) {
   if (!obj || typeof obj !== "object") return;
@@ -357,17 +505,23 @@ export function cleanJSONSchemaForAntigravity(schema) {
   // Mutate directly (schema is only used once per request)
   let cleaned = schema;
 
+  // Phase 0: Resolve internal $ref pointers before $defs/definitions/$ref are stripped
+  dereferenceSchema(cleaned);
+
   // Phase 1: Convert and prepare
   convertConstToEnum(cleaned);
   convertEnumValuesToStrings(cleaned);
 
   // Phase 2: Flatten complex structures
   mergeAllOf(cleaned);
+  convertPrefixItems(cleaned);
   flattenAnyOfOneOf(cleaned);
   flattenTypeArrays(cleaned);
 
-  // Phase 2.5: Infer missing type=object when properties exist (Gemini requirement)
+  // Phase 2.5: Infer missing type=object / type=array when properties/items exist
   ensureObjectType(cleaned);
+  ensureArrayItems(cleaned);
+  ensurePropertyTypes(cleaned);
 
   // Phase 3: Remove all unsupported keywords at ALL levels (including inside arrays)
   removeUnsupportedKeywords(cleaned, UNSUPPORTED_SCHEMA_CONSTRAINTS);
@@ -397,9 +551,25 @@ export function cleanJSONSchemaForAntigravity(schema) {
 
   cleanupRequired(cleaned);
 
+  // Phase 4.5: Re-verify all property types after keyword stripping
+  ensurePropertyTypes(cleaned);
+
   // Phase 5: Add placeholder for empty object schemas (Antigravity requirement)
   function addPlaceholders(obj) {
     if (!obj || typeof obj !== "object") return;
+
+    // Empty schema {} (no type, no properties) after $ref removal — treat as object with placeholder
+    if (Object.keys(obj).length === 0) {
+      obj.type = "object";
+      obj.properties = {
+        reason: {
+          type: "string",
+          description: "Brief explanation of why you are calling this tool",
+        },
+      };
+      obj.required = ["reason"];
+      return;
+    }
 
     if (obj.type === "object") {
       if (!obj.properties || Object.keys(obj.properties).length === 0) {

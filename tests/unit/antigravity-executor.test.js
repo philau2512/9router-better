@@ -33,6 +33,17 @@ describe("AntigravityExecutor", () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it("uses deterministic fallback project ID when credentials lack explicit projectId", () => {
+    const executor = new AntigravityExecutor();
+    const credsWithoutProject = { accessToken: "ag-token", connectionId: "conn-stable-xyz" };
+    const req1 = executor.transformRequest("gemini-3-flash-agent", body, true, credsWithoutProject);
+    const req2 = executor.transformRequest("gemini-3-flash-agent", body, true, credsWithoutProject);
+
+    expect(req1.project).toBe(req2.project);
+    expect(typeof req1.project).toBe("string");
+    expect(req1.project.length).toBeGreaterThan(0);
+  });
+
   it("builds production-first URLs and forces image generation to non-streaming", () => {
     const executor = new AntigravityExecutor();
 

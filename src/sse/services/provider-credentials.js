@@ -455,7 +455,7 @@ export async function markAccountUnavailable(
       modelLock___all: nextMonth,
       testStatus: "unavailable",
       errorCode: status,
-      lastError: `Quota reached: ${String(errorText).slice(0, 100)}`,
+      lastError: `Quota reached: ${String(errorText).slice(0, 500)}`,
       lastErrorAt: now.toISOString(),
       backoffLevel: 0,
     });
@@ -465,7 +465,7 @@ export async function markAccountUnavailable(
   if (isReachLimit || isInvalidToken || isSuspended) {
     const reason =
       typeof errorText === "string"
-        ? errorText.slice(0, 100)
+        ? errorText.slice(0, 500)
         : isInvalidToken
           ? "Invalid/Revoked Token"
           : isSuspended
@@ -517,7 +517,7 @@ export async function markAccountUnavailable(
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
   const reason =
-    typeof errorText === "string" ? errorText.slice(0, 100) : "Provider error";
+    typeof errorText === "string" ? errorText.slice(0, 500) : "Provider error";
   const lockUpdate = buildModelLockUpdate(model, cooldownMs);
 
   await updateProviderConnection(connectionId, {

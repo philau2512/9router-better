@@ -51,9 +51,9 @@ cd tests
 npx vitest run unit/database-backup-route.test.js unit/db-sqlite-vs-lowdb.test.js
 ```
 
-## Antigravity thinking and tool continuations
+## Antigravity thinking, schema dereferencing, and tool continuations
 
-Antigravity has two local protocol safeguards that must be kept as one behavior:
+Antigravity has local protocol and translation safeguards that must be kept as one behavior:
 
 1. Keep ordinary `generationConfig.maxOutputTokens` capped at `16384`, but permit
    active medium/high or extended thinking to use up to `65535`. A universal
@@ -63,6 +63,18 @@ Antigravity has two local protocol safeguards that must be kept as one behavior:
    otherwise-unmarked text until a signed tool-call boundary or terminal result
    establishes whether it is visible text; drop that pending text before a signed
    tool continuation, but preserve signed visible text and genuine final answers.
+3. **JSON Schema dereferencing & type protection**: `cleanJSONSchemaForAntigravity` in
+   `open-sse/translator/helpers/geminiHelper.js` and `open-sse/translator/formats/gemini.js`
+   must dereference internal JSON Pointers (`#/properties/…`, `#/$defs/…`, `#/definitions/…`)
+   before removing unsupported keywords, convert `prefixItems` to `items`, enforce explicit
+   fallback types for untyped properties/items, and insert a `{ reason: { type: "string" } }`
+   placeholder for empty object schemas. Unresolved `$ref` or missing `type` fields trigger
+   immediate `400 INVALID_ARGUMENT` rejections from the Antigravity endpoint.
+4. **Strict alternating role normalization**: `normalizeGeminiContents` must never merge
+   a `functionResponse` turn with a follow-up plain text `user` turn in the same message.
+   When consecutive same-role turns cannot be merged, insert a synthetic bridge turn
+   (`{ role: "model", parts: [{ text: "..." }] }`) to maintain strict alternating
+   `user -> model -> user` turns and avoid `400 INVALID_ARGUMENT`.
 
 Do not replace this with signature-only filtering: a `thoughtSignature` without
 `thought: true` can accompany visible text and is required for tool continuity.
@@ -72,7 +84,7 @@ Before accepting upstream changes to this flow, run:
 
 ```bash
 cd tests
-npx vitest run unit/antigravity-executor.test.js unit/antigravity-stream-resume.test.js translator/bugs-antigravity.test.js
+npx vitest run unit/antigravity-schema-ref.test.js unit/antigravity-executor.test.js unit/antigravity-stream-resume.test.js translator/bugs-antigravity.test.js
 ```
 
 ## OpenAI Responses output indexes
@@ -208,17 +220,27 @@ Keep provider-specific behavior at its existing seam:
   the executor.
 - **Antigravity:** `open-sse/executors/antigravity.js` contains output-token and
   signed-thought continuation safeguards; its supporting persisted signatures
-  are in `open-sse/services/thoughtSignatureStore.js`. Response translation must
-  stay aligned with `open-sse/translator/response/gemini-to-openai.js`.
+  are in `open-sse/services/thoughtSignatureStore.js` and must be scoped by model
+  family (`body.model || model`) to avoid cross-family replay. Schema dereferencing & type
+  enforcement live in `open-sse/translator/helpers/geminiHelper.js` / `formats/gemini.js`.
+  Response translation must stay aligned with `open-sse/translator/response/gemini-to-openai.js`.
 - **Kiro:** `open-sse/executors/kiro.js` owns binary EventStream decoding and
-  split thinking-tag buffering. Do not move this behavior into a generic text
-  translator.
+  split thinking-tag buffering. Tool names preserve underscores (`mcp__server__tool`)
+  and restore original names via `_toolNameMap` in `restoreToolName()`.
+- **Stream In-band Abort & Disconnect:** `open-sse/utils/streamHandler.js` (`pipeWithDisconnect`)
+  and `streamingHandler.js` deliver structured in-band terminal SSE error frames (`onAbortTerminal`)
+  when a stream aborts or times out after HTTP 200 has been sent, while keeping the fork's
+  `streamStateTracker`, TTFT/timing markers, and mid-stream auto-resume watchdogs intact.
 - **Qoder:** resolve PAT, OAuth refresh, and credential normalization only via
   `resolveQoderCredentials()` in `open-sse/services/qoderModels.js`. Executors
   and usage services must not recreate local PAT/job-token flows.
 - **OpenAI Responses:** keep the unique output-index allocator synchronized in
   `open-sse/transformer/responsesTransformer.js` and
   `open-sse/translator/response/openai-responses.js`.
+- **Modular Constants Architecture:** `src/shared/constants/providers.js` is a barrel
+  re-export over `src/shared/constants/providers/`. When upstream adds new usage-tracked
+  providers or auth categories (e.g. `commandcode` in `USAGE_SUPPORTED_PROVIDERS`), add them
+  to the respective sub-module (`usage-constants.js`, etc.) instead of overwriting the barrel.
 
 For translator updates, retain the pipeline `source -> openai -> target` and
 `target -> openai -> source`; prefer an already-registered direct route for

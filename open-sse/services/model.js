@@ -251,6 +251,17 @@ export async function getModelInfoCore(modelStr, aliasesOrGetter) {
   };
 }
 
+// Config-driven prefix → provider inference (first match wins, fallback "openai").
+const MODEL_PREFIX_PROVIDERS = [
+  // Codex CLI sends this bare virtual model for auto-review — keep it on OAuth Codex (#1398).
+  [/^codex-auto-review$/, "codex"],
+  [/^claude-/, "anthropic"],
+  [/^gemini-/, "gemini"],
+  [/^gpt-/, "openai"],
+  [/^o[134]/, "openai"],
+  [/^deepseek-/, "openrouter"],
+];
+
 /**
  * Infer provider from model name prefix
  * Used as fallback when no provider prefix or alias is given
@@ -258,12 +269,5 @@ export async function getModelInfoCore(modelStr, aliasesOrGetter) {
 function inferProviderFromModelName(modelName) {
   if (!modelName) return "openai";
   const m = modelName.toLowerCase();
-  if (m.startsWith("claude-")) return "anthropic";
-  if (m.startsWith("gemini-")) return "gemini";
-  if (m.startsWith("gpt-")) return "openai";
-  if (m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4"))
-    return "openai";
-  if (m.startsWith("deepseek-")) return "openrouter";
-  // Default fallback
-  return "openai";
+  return MODEL_PREFIX_PROVIDERS.find(([re]) => re.test(m))?.[1] || "openai";
 }
