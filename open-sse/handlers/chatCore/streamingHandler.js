@@ -209,9 +209,16 @@ export async function handleStreamingResponse({
   const isResponsesPassthrough =
     sourceFormat === FORMATS.OPENAI_RESPONSES &&
     targetFormat === FORMATS.OPENAI_RESPONSES;
-  const onAbortTerminal = isResponsesPassthrough
-    ? buildAbortedResponsesTerminalBytes
-    : (message) => buildStreamErrorBytes(HTTP_STATUS.GATEWAY_TIMEOUT, message, sourceFormat);
+  const onAbortTerminal = (message) => {
+    reqLogger?.finalize?.({
+      durationMs: Date.now() - requestStartTime,
+      status: "error",
+      error: new Error(message || "Stream aborted"),
+    });
+    return isResponsesPassthrough
+      ? buildAbortedResponsesTerminalBytes(message)
+      : buildStreamErrorBytes(HTTP_STATUS.GATEWAY_TIMEOUT, message, sourceFormat);
+  };
   // Stall timeout resolution. Priority:
   //   credentials.providerSpecificData.stallTimeoutMs (>0, user override for
   //     slow reasoning models on compatible providers)
@@ -342,6 +349,7 @@ export function buildOnStreamComplete({
   translatedBody,
   clientRawRequest,
   timing,
+  reqLogger,
 }) {
   // Generate a shared id so the placeholder row (0 tokens) and the final row
   // (real usage) target the same DB record via ON CONFLICT(id) upsert.
@@ -362,6 +370,13 @@ export function buildOnStreamComplete({
     // R2-F6: distinguish fast-path PASSTHROUGH (no accumulatedContent) from truly empty
     const safeContent = contentObj?.content || "[Empty streaming response]";
     const safeThinking = contentObj?.thinking || null;
+
+    reqLogger?.finalize?.({
+      durationMs: total,
+      ttft: latency.ttft,
+      status: "success",
+      usage,
+    });
 
     if (timing) {
       log.ttft(`${provider.toUpperCase()} | ${log.hlModel(model)}`, {
