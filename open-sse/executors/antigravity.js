@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { BaseExecutor, waitForAbortableDelay } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import {

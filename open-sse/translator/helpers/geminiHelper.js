@@ -1,4 +1,5 @@
 // Gemini helper functions for translator
+import crypto from "node:crypto";
 
 // Unsupported JSON Schema constraints that should be removed for Antigravity
 export const UNSUPPORTED_SCHEMA_CONSTRAINTS = [

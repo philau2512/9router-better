@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import {
