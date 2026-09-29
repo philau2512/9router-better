@@ -98,3 +98,21 @@ export const SKIP_PATTERNS = [
 // See upstream fix e79f9eddb.
 export const SEARXNG_URL =
   (process.env.SEARXNG_URL || "").trim() || "http://localhost:8888/search";
+
+// Slow request / hanging request trap configuration
+export const DEFAULT_SLOW_REQUEST_THRESHOLD_MS = 30 * 1000;
+export const SLOW_REQUEST_THRESHOLD_MS =
+  parseInt(process.env.SLOW_REQUEST_THRESHOLD_MS, 10) ||
+  DEFAULT_SLOW_REQUEST_THRESHOLD_MS;
+
+export const DEFAULT_SLOW_REQUEST_WATCHDOG_MS = 30 * 1000;
+export const SLOW_REQUEST_WATCHDOG_MS =
+  parseInt(process.env.SLOW_REQUEST_WATCHDOG_MS, 10) ||
+  DEFAULT_SLOW_REQUEST_WATCHDOG_MS;
+
+export const isSlowRequestLogsEnabled = () =>
+  process.env.ENABLE_SLOW_REQUEST_LOGS !== "false";
+
+export const isSlowRequestObservabilityEnabled = () =>
+  process.env.ENABLE_SLOW_REQUEST_OBSERVABILITY !== "false";
+

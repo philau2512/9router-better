@@ -303,13 +303,36 @@ async function getDispatcher(proxyUrl) {
 /**
  * Create HTTPS request with manual socket connection (bypass DNS)
  */
-async function createBypassRequest(parsedUrl, realIP, options, timing = null) {
+async function createBypassRequest(
+  parsedUrl,
+  realIP,
+  options,
+  timing = null,
+  proxyOptions = null,
+) {
   const httpsModule = await import("https");
   const https = httpsModule.default ?? httpsModule;
+  const timeoutMs = resolveProxyHeadersTimeoutMs(proxyOptions);
 
   return new Promise((resolve, reject) => {
+    let headerTimer = null;
+    let headersTimedOut = false;
+
+    headerTimer = setTimeout(() => {
+      headersTimedOut = true;
+      if (timing) timing.headersTimedOut = true;
+      req.destroy();
+      const err = new Error(
+        `Connection headers timed out after ${timeoutMs}ms`,
+      );
+      err.name = "TimeoutError";
+      err.status = 504;
+      err.proxyHeadersTimedOut = true;
+      reject(err);
+    }, timeoutMs);
+
     const reqOptions = {
-      hostname: parsedUrl.hostname,
+      hostname: realIP || parsedUrl.hostname,
       port: HTTPS_PORT,
       path: parsedUrl.pathname + parsedUrl.search,
       method: options.method || "POST",
@@ -323,6 +346,7 @@ async function createBypassRequest(parsedUrl, realIP, options, timing = null) {
     };
 
     const req = https.request(reqOptions, (res) => {
+      if (headerTimer) clearTimeout(headerTimer);
       if (timing && !timing.headersAt) timing.headersAt = Date.now();
       const response = {
         ok:
@@ -343,14 +367,20 @@ async function createBypassRequest(parsedUrl, realIP, options, timing = null) {
       resolve(response);
     });
 
-    req.on("error", reject);
+    req.on("error", (err) => {
+      if (headerTimer) clearTimeout(headerTimer);
+      if (headersTimedOut) return;
+      reject(err);
+    });
 
     if (options.signal) {
       if (options.signal.aborted) {
+        if (headerTimer) clearTimeout(headerTimer);
         req.destroy();
         reject(new DOMException("The user aborted a request.", "AbortError"));
       } else {
         options.signal.addEventListener("abort", () => {
+          if (headerTimer) clearTimeout(headerTimer);
           req.destroy();
           reject(new DOMException("The user aborted a request.", "AbortError"));
         });
@@ -465,7 +495,13 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       const realIP = await resolveRealIP(parsedUrl.hostname);
       timing.dnsResolvedAt = Date.now();
       if (realIP)
-        return await createBypassRequest(parsedUrl, realIP, options, timing);
+        return await createBypassRequest(
+          parsedUrl,
+          realIP,
+          options,
+          timing,
+          proxyOptions,
+        );
     } catch (error) {
       console.warn(`[ProxyFetch] MITM bypass failed: ${error.message}`);
     }
@@ -503,7 +539,13 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       timing.mode = "direct-fallback";
       timing.directFallbackStartAt = Date.now();
       try {
-        const response = await originalFetch(url, options);
+        const response = await fetchViaProxyWithHeadersTimeout(
+          url,
+          options,
+          null,
+          timing,
+          proxyOptions,
+        );
         timing.headersAt = Date.now();
         response.__timing = timing;
         return response;
@@ -522,19 +564,17 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
     }
   }
 
-  const fetchFn =
-    globalThis.fetch && globalThis.fetch !== patchedFetch
-      ? globalThis.fetch
-      : originalFetch;
-
   // Use pooled undici Agent for direct requests (connection reuse, HTTP/2)
   const directAgent = await getDirectAgent(targetUrl);
   if (directAgent) {
     timing.mode = "pooled";
-    const response = await fetchFn(url, {
-      ...options,
-      dispatcher: directAgent,
-    });
+    const response = await fetchViaProxyWithHeadersTimeout(
+      url,
+      options,
+      directAgent,
+      timing,
+      proxyOptions,
+    );
     timing.headersAt = Date.now();
     if (response && typeof response === "object") {
       response.__timing = timing;
@@ -543,7 +583,13 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   }
 
   // Fallback to native fetch if Agent creation failed
-  const response = await fetchFn(url, options);
+  const response = await fetchViaProxyWithHeadersTimeout(
+    url,
+    options,
+    null,
+    timing,
+    proxyOptions,
+  );
   timing.headersAt = Date.now();
   if (response && typeof response === "object") {
     response.__timing = timing;

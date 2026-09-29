@@ -414,9 +414,16 @@ export async function handleChatCore({
     );
     if (!translatedBody) {
       trackPendingRequest(model, provider, connectionId, false, true);
+      const errMsg = `Failed to translate request for ${sourceFormat} → ${targetFormat}`;
+      reqLogger.logError(new Error(errMsg), body);
+      reqLogger.finalize?.({
+        durationMs: Date.now() - requestStartTime,
+        status: "error",
+        error: new Error(errMsg),
+      });
       return createErrorResult(
         HTTP_STATUS.BAD_REQUEST,
-        `Failed to translate request for ${sourceFormat} → ${targetFormat}`,
+        errMsg,
       );
     }
     toolNameMap = translatedBody._toolNameMap;
@@ -729,6 +736,12 @@ export async function handleChatCore({
       }),
     ).catch(() => {});
 
+    reqLogger.logError(error, translatedBody);
+    reqLogger.finalize?.({
+      durationMs: Date.now() - requestStartTime,
+      status: "error",
+      error,
+    });
     if (error.name === "AbortError") {
       streamController.handleError(error);
       return createErrorResult(499, "Request aborted");
@@ -894,6 +907,11 @@ export async function handleChatCore({
     );
     console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
     reqLogger.logError(new Error(message), finalBody || translatedBody);
+    reqLogger.finalize?.({
+      durationMs: Date.now() - requestStartTime,
+      status: "error",
+      error: new Error(message),
+    });
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
 
@@ -910,6 +928,7 @@ export async function handleChatCore({
     clientRawRequest,
     onRequestSuccess,
     midStreamResumeEnabled,
+    reqLogger,
     // PxPipe compression stats — included so requestDetail builders can persist them.
     pxpipe: pxpipeSummary || undefined,
   };

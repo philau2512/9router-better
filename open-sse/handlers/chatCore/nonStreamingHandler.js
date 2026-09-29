@@ -333,11 +333,17 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
     const parsed = parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      const err = new Error("Invalid SSE response for non-streaming request");
+      reqLogger.logError(err);
+      reqLogger.finalize?.({ durationMs: Date.now() - requestStartTime, status: "error", error: err });
       return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
     }
     responseBody = parsed;
     if (responseBody?.error) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      const err = new Error(responseBody.error.message || "Upstream SSE stream failed");
+      reqLogger.logError(err);
+      reqLogger.finalize?.({ durationMs: Date.now() - requestStartTime, status: "error", error: err });
       return createErrorResult(
         HTTP_STATUS.BAD_GATEWAY,
         responseBody.error.message || "Upstream SSE stream failed",
@@ -348,6 +354,8 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
       responseBody = await providerResponse.json();
     } catch (err) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      reqLogger.logError(err);
+      reqLogger.finalize?.({ durationMs: Date.now() - requestStartTime, status: "error", error: err });
       console.error(`[ChatCore] Failed to parse JSON from ${provider}:`, err.message);
       return createErrorResult(HTTP_STATUS.BAD_GATEWAY, `Invalid JSON response from ${provider}`);
     }
@@ -425,6 +433,13 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   reqLogger.logConvertedResponse(translatedResponse);
 
   const totalLatency = Date.now() - requestStartTime;
+  reqLogger?.finalize?.({
+    durationMs: totalLatency,
+    ttft: totalLatency,
+    status: "success",
+    usage,
+  });
+
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId,
     latency: { ttft: totalLatency, total: totalLatency },

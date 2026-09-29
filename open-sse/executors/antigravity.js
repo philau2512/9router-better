@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { BaseExecutor, waitForAbortableDelay } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import {
@@ -73,6 +73,10 @@ const ANTIGRAVITY_TRANSIENT_ERROR_PATTERNS = [
   /timeout/i,
   /stream\s+(ended|closed|terminated|interrupted)/i,
   /empty\s+response/i,
+  /eof/i,
+  /socket\s+hang\s+up/i,
+  /econnereset/i,
+  /fetch\s+failed/i,
 ];
 
 const ANTIGRAVITY_TRANSIENT_STATUSES = new Set([
