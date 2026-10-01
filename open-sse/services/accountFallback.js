@@ -94,7 +94,7 @@ export function getQuotaCooldown(backoffLevel = 0) {
  * @param {number} backoffLevel - Current backoff level for exponential backoff
  * @returns {{ shouldFallback: boolean, cooldownMs: number, newBackoffLevel?: number }}
  */
-export function checkFallbackError(status, errorText, backoffLevel = 0) {
+export function checkFallbackError(status, errorText, backoffLevel = 0, provider = null) {
   const lowerError = errorText
     ? (typeof errorText === "string"
         ? errorText
@@ -102,29 +102,8 @@ export function checkFallbackError(status, errorText, backoffLevel = 0) {
       ).toLowerCase()
     : "";
 
-  // Client closed the request (nginx-style 499 / AbortError). Not a provider
-  // fault — do not lock modelLock_* or rotate accounts/combo models.
-  if (
-    status === 499 ||
-    lowerError.includes("request aborted") ||
-    lowerError.includes("client disconnected") ||
-    lowerError.includes("the user aborted a request")
-  ) {
-    return { shouldFallback: false, cooldownMs: 0 };
-  }
-
-  if (
-    lowerError.includes("model is not supported") ||
-    lowerError.includes("invalid model id") ||
-    lowerError.includes("invalid_model_id") ||
-    lowerError.includes(
-      "encountered an unexpected error when processing the request",
-    )
-  ) {
-    return { shouldFallback: false, cooldownMs: 0 };
-  }
-
   for (const rule of ERROR_RULES) {
+    if (rule.provider && rule.provider !== provider) continue;
     // Text-based rule: match substring in error message
     if (rule.text && lowerError && lowerError.includes(rule.text)) {
       if (rule.backoff) {
@@ -150,6 +129,28 @@ export function checkFallbackError(status, errorText, backoffLevel = 0) {
       }
       return { shouldFallback: true, cooldownMs: rule.cooldownMs };
     }
+  }
+
+  // Client closed the request (nginx-style 499 / AbortError). Not a provider
+  // fault — do not lock modelLock_* or rotate accounts/combo models.
+  if (
+    status === 499 ||
+    lowerError.includes("request aborted") ||
+    lowerError.includes("client disconnected") ||
+    lowerError.includes("the user aborted a request")
+  ) {
+    return { shouldFallback: false, cooldownMs: 0 };
+  }
+
+  if (
+    lowerError.includes("model is not supported") ||
+    lowerError.includes("invalid model id") ||
+    lowerError.includes("invalid_model_id") ||
+    lowerError.includes(
+      "encountered an unexpected error when processing the request",
+    )
+  ) {
+    return { shouldFallback: false, cooldownMs: 0 };
   }
 
   // Request-scoped client errors that matched no rule above: a 400 caused by the

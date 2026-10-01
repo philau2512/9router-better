@@ -174,11 +174,14 @@ export async function getProviderCredentials(
     // Antigravity quota cache is lazy: only populated after that account returns 409/429.
     const isAntigravity = providerId === "antigravity";
     const antigravityQuotaCache = isAntigravity && model ? getAntigravityQuotaCache() : null;
+    const requestedModel = options?.requestedModel || model;
 
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections
     const availableConnections = connections.filter((c) => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
+      const enabled = c.providerSpecificData?.enabledModels;
+      if (providerId === "codex" && Array.isArray(enabled) && enabled.length && requestedModel && !enabled.includes(requestedModel)) return false;
       if (isAntigravity && model && antigravityQuotaCache) {
         const quota = antigravityQuotaCache.get(c.id)?.[model];
         if (quota && quota.remainingPercentage <= 0 && quota.resetAt && new Date(quota.resetAt).getTime() > Date.now()) {
@@ -512,6 +515,7 @@ export async function markAccountUnavailable(
       status,
       errorText,
       backoffLevel,
+      resolveProviderId(provider),
     ));
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };

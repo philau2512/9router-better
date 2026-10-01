@@ -41,6 +41,11 @@ const STREAM_MODE = {
   PASSTHROUGH: "passthrough", // No translation, normalize output, extract usage
 };
 
+// Upper bound on the deferred response.completed wait: a chat->responses stream
+// that saw finish_reason without usage must not hold the client's terminal event
+// forever when the upstream stalls with no usage trailer and no [DONE].
+const PENDING_COMPLETION_FLUSH_MS = 3000;
+
 /**
  * Create unified SSE transform stream
  * @param {object} options
@@ -145,6 +150,12 @@ export function createSSEStream(options = {}) {
           model,
           sessionId: credentials?._clientSessionId || null,
           geminiSawThought: resumedAfterAntigravityThought,
+          // Which upstream format this stream came from. A response translator can be
+          // reached either directly (target === its registered source) or as the second
+          // hop of a pivot, and on the terminal null chunk the pivot drops it — so a
+          // translator that defers closing events until flush needs to know which case
+          // it is in. Absent/undefined means "unknown", i.e. do not defer.
+          targetFormat,
         }
       : null;
   if (streamStateTracker) {
@@ -190,7 +201,25 @@ export function createSSEStream(options = {}) {
   let openAIResponsesTerminalSeen = false;
   let openAIResponsesDoneSent = false;
   let streamDoneSent = false; // track duplicate [DONE] across transform + flush
+  let completionFlushTimer = null;
   const outputItemCollector = createOutputItemCollector(); // Phase 4: Codex output reconstruction
+
+  // Emit the deferred response.completed now — at [DONE], or when the watchdog
+  // below gives up on a usage trailer that never arrives.
+  const flushPendingCompletion = (controller) => {
+    if (completionFlushTimer) {
+      clearTimeout(completionFlushTimer);
+      completionFlushTimer = null;
+    }
+    const completed = translateResponse(targetFormat, sourceFormat, null, state);
+    for (const item of completed || []) {
+      if (item === null || item === undefined) continue;
+      const output = formatSSE(item, sourceFormat);
+      reqLogger?.appendConvertedChunk?.(output);
+      controller.enqueue(sharedEncoder.encode(output));
+      sseEmittedCount++;
+    }
+  };
 
   // Translate a single already-parsed event object into client-format SSE bytes.
   // Shared by the byte line-loop (after parseSSELine) AND the Phase 3 object-input
@@ -224,6 +253,18 @@ export function createSSEStream(options = {}) {
     // For Ollama: done=true is the final chunk with finish_reason/usage, must translate
     // For other formats: done=true is the [DONE] sentinel, skip
     if (parsed && parsed.done && targetFormat !== FORMATS.OLLAMA) {
+      // A direct Chat-to-Responses translation can defer response.completed
+      // while waiting for a usage trailer. [DONE] ends that opportunity even
+      // if the upstream keeps the HTTP connection open, so finish now.
+      if (
+        targetFormat === FORMATS.OPENAI &&
+        sourceFormat === FORMATS.OPENAI_RESPONSES &&
+        state?.completionPending &&
+        !state?.completedSent
+      ) {
+        flushPendingCompletion(controller);
+      }
+
       // Synthesize response.failed if the Responses stream never sent a terminal event
       if (keepsOpenAIResponsesFormat && !openAIResponsesTerminalSeen) {
         const failedOutput = formatIncompleteOpenAIResponsesStreamFailure();
@@ -421,6 +462,27 @@ export function createSSEStream(options = {}) {
         emitFirstChunkLog(output, { kind: item.type || "translated" });
         controller.enqueue(sharedEncoder.encode(output));
         sseEmittedCount++;
+      }
+
+      // The completion deferral can outlive the upstream: a broken chat upstream
+      // may stall after finish_reason with no usage trailer and no [DONE], holding
+      // the connection open. Bound the wait so the client still gets a terminal event.
+      if (
+        targetFormat === FORMATS.OPENAI &&
+        sourceFormat === FORMATS.OPENAI_RESPONSES &&
+        state?.completionPending &&
+        !state?.completedSent &&
+        !completionFlushTimer
+      ) {
+        completionFlushTimer = setTimeout(() => {
+          completionFlushTimer = null;
+          if (state?.completedSent) return;
+          try {
+            flushPendingCompletion(controller);
+          } catch {
+            /* controller already closed */
+          }
+        }, PENDING_COMPLETION_FLUSH_MS);
       }
     }
   };
@@ -861,6 +923,11 @@ export function createSSEStream(options = {}) {
             translateOneEvent(parsed, controller);
             updateTracker();
           }
+        }
+
+        if (completionFlushTimer) {
+          clearTimeout(completionFlushTimer);
+          completionFlushTimer = null;
         }
 
         const flushed = translateResponse(

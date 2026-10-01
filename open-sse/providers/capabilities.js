@@ -83,6 +83,18 @@ export function capabilitiesFromServiceKind(kind) {
  * otherwise mis-match. Only declare deltas vs DEFAULT.
  */
 export const MODEL_CAPABILITIES = {
+  // Codex GPT-6 / GPT-5.6 extended context and GPT-6 Sol/Luna/6.1 Sol
+  "gpt-6-astra": { vision: true, reasoning: true, search: true, contextWindow: 272000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: true },
+  "gpt-6-sol": { vision: true, reasoning: true, search: true, contextWindow: 272000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+  "gpt-6.1-sol": { vision: true, reasoning: true, search: true, contextWindow: 272000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+  "gpt-6-luna": { vision: true, reasoning: true, search: true, contextWindow: 272000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+  "gpt-6-astra[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: true },
+  "gpt-6-sol[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+  "gpt-6-luna[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+  "gpt-5.6-sol[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+  "gpt-5.6-terra[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+  "gpt-5.6-luna[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
+
   // Claude Fable 5.1, Opus 5, 4.6/4.7/4.8, and Kiro Sonnet 5 have 1M context + adaptive thinking (override generic claude pattern)
   "claude-fable-5-1": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 },
   "claude-opus-5":     { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },

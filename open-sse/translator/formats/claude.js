@@ -25,24 +25,32 @@ export function lastCacheableToolIndex(tools) {
 }
 
 // Check if message has valid non-empty content
+// A block type outside this list makes the whole message count as empty and be
+// dropped by prepareClaudeRequest — so anything the caller can legitimately
+// send alone must be listed. container_upload (Files API) is one of those:
+// a user turn whose only block is a file reference is valid Anthropic input
+// (#4316), and dropping it forwarded `messages: []` to the provider.
+const CONTENTFUL_BLOCKS = new Set([
+  CLAUDE_BLOCK.TOOL_USE,
+  CLAUDE_BLOCK.TOOL_RESULT,
+  CLAUDE_BLOCK.IMAGE,
+  CLAUDE_BLOCK.DOCUMENT,
+  CLAUDE_BLOCK.CONTAINER_UPLOAD,
+]);
+
+function isContentfulBlock(block) {
+  if (!block) return false;
+  if (block.type === CLAUDE_BLOCK.TEXT) return !!block.text?.trim();
+  return CONTENTFUL_BLOCKS.has(block.type);
+}
+
 export function hasValidContent(msg) {
   if (typeof msg.content === "string" && msg.content.trim()) return true;
   if (msg.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
-    const block = msg.content;
-    return !!((block.type === CLAUDE_BLOCK.TEXT && block.text?.trim()) ||
-      block.type === CLAUDE_BLOCK.TOOL_USE ||
-      block.type === CLAUDE_BLOCK.TOOL_RESULT ||
-      block.type === CLAUDE_BLOCK.IMAGE ||
-      block.type === CLAUDE_BLOCK.DOCUMENT);
+    return isContentfulBlock(msg.content);
   }
   if (Array.isArray(msg.content)) {
-    return msg.content.some(block =>
-      (block.type === CLAUDE_BLOCK.TEXT && block.text?.trim()) ||
-      block.type === CLAUDE_BLOCK.TOOL_USE ||
-      block.type === CLAUDE_BLOCK.TOOL_RESULT ||
-      block.type === CLAUDE_BLOCK.IMAGE ||
-      block.type === CLAUDE_BLOCK.DOCUMENT
-    );
+    return msg.content.some(isContentfulBlock);
   }
   return false;
 }
@@ -215,6 +223,8 @@ export function normalizeClaudePassthrough(body, model = "") {
     if (Object.keys(body.output_config).length === 0) delete body.output_config;
   }
 
+  const originalLastRole = Array.isArray(body.messages) ? body.messages[body.messages.length - 1]?.role : undefined;
+
   // 3. Wrap bare content-block objects as one-element arrays before folding.
   // Some clients send content: {block} instead of content: [{block}]; the
   // mid-conversation-system fold below assumes the array shape, so it must
@@ -316,9 +326,23 @@ export function normalizeClaudePassthrough(body, model = "") {
         !(block?.type === CLAUDE_BLOCK.TEXT && !String(block.text ?? "").trim()));
       return msg.content.length > 0;
     });
+    body.messages = ensureTrailingUserTurn(body.messages, originalLastRole);
   }
 
   return body;
+}
+
+// Newer Claude models reject a body that ends on an assistant turn ("does not
+// support assistant message prefill"). Cleanup passes delete messages left empty,
+// so a trailing user turn that was empty (or held only dropped blocks) silently
+// turns the previous assistant turn into the last one. Restore a user turn only
+// when the client did not itself end on assistant (real prefill is its choice).
+const TRAILING_USER_PLACEHOLDER = "Continue.";
+
+export function ensureTrailingUserTurn(messages, originalLastRole) {
+  if (!Array.isArray(messages) || originalLastRole === ROLE.ASSISTANT) return messages;
+  if (messages[messages.length - 1]?.role !== ROLE.ASSISTANT) return messages;
+  return [...messages, { role: ROLE.USER, content: [{ type: CLAUDE_BLOCK.TEXT, text: TRAILING_USER_PLACEHOLDER }] }];
 }
 
 // Put a 5m breakpoint on the last cache-eligible block of a message.
@@ -480,6 +504,7 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
   // 2. Messages: process in optimized passes
   if (body.messages && Array.isArray(body.messages)) {
     const len = body.messages.length;
+    const originalLastRole = body.messages[len - 1]?.role;
     let filtered = [];
 
     // Pass 1: remove cache_control + filter empty messages
@@ -504,6 +529,7 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
     // Pass 1.5: Fix tool_use/tool_result ordering
     // Each tool_use must have tool_result in the NEXT message (not same message with other content)
     filtered = fixToolUseOrdering(filtered);
+    filtered = ensureTrailingUserTurn(filtered, originalLastRole);
 
     body.messages = filtered;
 

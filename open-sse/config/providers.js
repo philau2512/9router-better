@@ -92,7 +92,8 @@ export const PROVIDERS = {
     format: "openai-responses",
     headers: {
       originator: "codex_cli_rs",
-      "User-Agent": "codex_cli_rs/0.136.0",
+      "User-Agent": "codex_cli_rs/0.159.0",
+      version: "0.159.0",
     },
     clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
     tokenUrl: "https://auth.openai.com/oauth/token",
@@ -473,6 +474,33 @@ export const PROVIDERS = {
       {
         format: "openai-responses",
         baseUrl: "https://opencode.ai/zen/go/v1/responses",
+        auth: { combined: true, header: "Authorization", scheme: "bearer" },
+      },
+    ],
+  },
+  "opencode-zen": {
+    baseUrl: "https://opencode.ai/zen/v1/chat/completions",
+    format: "openai",
+    headers: {},
+    transports: [
+      {
+        format: "openai",
+        baseUrl: "https://opencode.ai/zen/v1/chat/completions",
+        auth: { combined: true, header: "Authorization", scheme: "bearer" },
+      },
+      {
+        format: "claude",
+        baseUrl: "https://opencode.ai/zen/v1/messages",
+        auth: {
+          combined: true,
+          header: "x-api-key",
+          scheme: "raw",
+          anthropicVersion: true,
+        },
+      },
+      {
+        format: "openai-responses",
+        baseUrl: "https://opencode.ai/zen/v1/responses",
         auth: { combined: true, header: "Authorization", scheme: "bearer" },
       },
     ],

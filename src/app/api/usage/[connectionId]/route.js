@@ -64,6 +64,11 @@ export async function refreshAndUpdateCredentials(
   force = false,
   proxyOptions = null,
 ) {
+  // Re-read latest tokens: OpenAI rotates the refresh token on every refresh, and
+  // refreshing with a stale snapshot (reuse) revokes the whole session → account logout.
+  const latest = connection.id ? await getProviderConnectionById(connection.id) : null;
+  if (latest) connection = latest;
+
   const provider = connection.provider;
   const credentials = buildCredentialsFromConnection(connection);
   // GitHub needs specialized Copilot exchange; other OAuth providers use the

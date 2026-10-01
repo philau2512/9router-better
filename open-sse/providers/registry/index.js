@@ -1,4 +1,8 @@
 // Auto-generated: static imports for all registry entries
+import p_agnes from "./agnes.js";
+import p_atria from "./atria.js";
+import p_bai from "./bai.js";
+import p_dahl from "./dahl.js";
 import p0 from "./alicode-intl.js";
 import p1 from "./alicode.js";
 import p2 from "./anthropic.js";
@@ -69,6 +73,7 @@ import p66 from "./ollama.js";
 import p123 from "./ollama-search.js";
 import p67 from "./openai.js";
 import p68 from "./opencode-go.js";
+import p68z from "./opencode-zen.js";
 import p69 from "./opencode.js";
 import p70 from "./openrouter.js";
 import p71 from "./perplexity-web.js";
@@ -124,6 +129,10 @@ import p120 from "./fish-audio.js";
 import p121 from "./alitp-intl.js";
 import p122 from "./xquik.js";
 export default [
+  p_agnes,
+  p_atria,
+  p_bai,
+  p_dahl,
   p0,
   p1,
   p2,
@@ -194,6 +203,7 @@ export default [
   p123,
   p67,
   p68,
+  p68z,
   p69,
   p70,
   p71,
