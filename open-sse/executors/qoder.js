@@ -28,7 +28,7 @@ import { createHash } from "crypto";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
-import { FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { FETCH_CONNECT_TIMEOUT_MS, HTTP_STATUS } from "../config/runtimeConfig.js";
 import {
   QODER_CHAT_SIG_PATH,
   QODER_CONTEXT_TIER_ENV,
@@ -389,33 +389,43 @@ function isBillingBlock(inner) {
 
 async function peekFirstQoderFrame(reader, decoder) {
   let consumed = "";
+  let offset = 0;
+  let upstreamDone = false;
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) return { isBilling: false, consumed, upstreamDone: true };
-
-    consumed += decoder.decode(value, { stream: true });
-    const newline = consumed.indexOf("\n");
-    if (newline === -1) continue;
-
-    const line = consumed.slice(0, newline).replace(/\r$/, "").trim();
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trimStart();
-    if (data === "[DONE]") return { isBilling: false, consumed };
-
-    try {
-      const envelope = JSON.parse(data);
-      const statusVal =
-        typeof envelope.statusCodeValue === "number"
-          ? envelope.statusCodeValue
-          : 200;
-      const inner = typeof envelope.body === "string" ? envelope.body : "";
-      if (statusVal !== 200 && isBillingBlock(inner)) {
-        return { isBilling: true, statusVal, message: inner };
-      }
-    } catch {
-      // A malformed first event is handled by the normal stream parser.
+    let nl = consumed.indexOf("\n", offset);
+    if (nl === -1 && !upstreamDone) {
+      const { done, value } = await reader.read();
+      upstreamDone = done;
+      consumed += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      continue;
     }
-    return { isBilling: false, consumed };
+    if (offset >= consumed.length) return { isError: false, consumed, upstreamDone };
+    if (nl === -1) nl = consumed.length;
+
+    const line = consumed.slice(offset, nl).replace(/\r$/, "").trim();
+    offset = nl + 1;
+    if (!line.startsWith("data:")) continue;
+
+    const data = line.slice(5).trimStart();
+    if (data === "[DONE]") return { isError: false, consumed, upstreamDone };
+
+    let envelope;
+    try {
+      envelope = JSON.parse(data);
+    } catch {
+      return { isError: false, consumed, upstreamDone };
+    }
+
+    const raw = Number(envelope?.statusCodeValue);
+    const statusVal = Number.isNaN(raw) ? 200 : raw;
+    const inner = typeof envelope?.body === "string"
+      ? envelope.body
+      : envelope?.body != null ? JSON.stringify(envelope.body) : "";
+
+    if (statusVal !== 200) {
+      return { isError: true, isBilling: isBillingBlock(inner), statusVal, message: inner || `upstream status ${statusVal}` };
+    }
+    return { isError: false, consumed, upstreamDone };
   }
 }
 
@@ -425,17 +435,21 @@ function wrapQoderSSE(response, model) {
 }
 
 async function wrapQoderSSEAsync(response, model) {
-
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   const peek = await peekFirstQoderFrame(reader, decoder);
-  if (peek.isBilling) {
+  if (peek.isError) {
     await reader.cancel().catch(() => {});
+    const status = peek.isBilling
+      ? HTTP_STATUS.FORBIDDEN
+      : Number.isInteger(peek.statusVal) && peek.statusVal >= HTTP_STATUS.BAD_REQUEST && peek.statusVal <= 599
+        ? peek.statusVal
+        : HTTP_STATUS.BAD_GATEWAY;
     return new Response(
       JSON.stringify({
         error: { message: peek.message, code: peek.statusVal },
       }),
-      { status: 403, headers: { "Content-Type": "application/json" } },
+      { status, headers: { "Content-Type": "application/json" } },
     );
   }
 
@@ -736,8 +750,15 @@ export class QoderExecutor extends BaseExecutor {
       response = await proxyAwareFetch(
         url,
         { method: "POST", headers, body: encodedBodyBuf, signal: mergedSignal },
-        proxyOptions,
+        // A failed proxy request may already have reached Qoder. Replaying
+        // the same COSY signature directly reuses its requestId and returns
+        // 403/code 103. Let the caller retry through execute() with fresh signing.
+        { ...proxyOptions, strictProxy: true },
       );
+    } catch (err) {
+      // strictProxy wraps transport errors; retain caller cancellation semantics.
+      if (mergedSignal.aborted) throw mergedSignal.reason;
+      throw err;
     } finally {
       clearTimeout(connectTimer);
     }

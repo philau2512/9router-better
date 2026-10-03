@@ -989,6 +989,24 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         );
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
       }
+      case "dahl":
+      case "atria":
+      case "agnes":
+      case "bai": {
+        const validateUrls = {
+          dahl: "https://inference.dahl.global/v1/models",
+          atria: "https://api.atria-asi.ai/v1/models",
+          agnes: "https://apihub.agnes-ai.com/v1/models",
+          bai: "https://api.b.ai/v1/models",
+        };
+        const validateUrl = validateUrls[connection.provider] || PROVIDERS[connection.provider]?.validateUrl;
+        const res = await fetchWithConnectionProxy(
+          validateUrl,
+          { headers: { Authorization: `Bearer ${connection.apiKey}` } },
+          effectiveProxy,
+        );
+        return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
+      }
       case "ollama": {
         const res = await fetch("https://ollama.com/api/tags", {
           headers: { Authorization: `Bearer ${connection.apiKey}` },
