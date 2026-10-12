@@ -1,5 +1,41 @@
 # Fork changelog
 
+## 2026-10-12 — Fix Antigravity 404/429 khi gọi Gemini 3.7 Flash và đồng bộ với Cursor BYOK
+
+### Vấn đề
+
+User gặp lỗi `[404]: { "error": { "code": 404, "message": "Requested entity was not found.", "status": "NOT_FOUND" } }` khi gọi `gemini-3.7-flash` qua provider Antigravity, trong khi plugin Antigravity bên Cursor BYOK vẫn gọi thành công.
+
+### Root cause
+
+1. **Model Tiering trên Google CloudCode PA API:** Google API hiện tại không còn chấp nhận model base không tier (`gemini-3.7-flash`) cũng như model alias `-tiered` (`gemini-3.7-flash-tiered`) mà trả về HTTP 404. API chỉ chấp nhận các tier tường minh: `gemini-3.7-flash-high`, `gemini-3.7-flash-medium`, `gemini-3.7-flash-low`.
+2. **Sai lệch Model Aliases cũ:** Trong `open-sse/providers/antigravity-provider-metadata.js`, `ANTIGRAVITY_MODEL_ALIASES` trước đây tự ép `gemini-3.7-flash-high/medium/low` về `gemini-3.7-flash-tiered` (dẫn tới 404). Khi gọi `gemini-3.7-flash` trần, 9router thiếu alias nên gửi nguyên model id lên upstream (cũng bị 404).
+3. **Thiếu mapping trong MITM:** `src/mitm/config.js` thiếu `gemini-3.7-flash` trong `MODEL_SYNONYMS.antigravity`, khiến request qua MITM bị regex fallback sang model khác.
+4. **Thiếu header và credit type:** Payload chưa có `enabledCreditTypes: ["GOOGLE_ONE_AI"]`, thiếu header `Anthropic-Beta` cho các model Claude qua Antigravity, và thiếu failover URL khi gặp 404.
+
+### Fix
+
+- **File:** `open-sse/providers/antigravity-provider-metadata.js`
+  - Map `gemini-3.7-flash` và `gemini-3.7-flash-thinking` -> `gemini-3.7-flash-high`.
+  - Giữ nguyên các model tier `gemini-3.7-flash-high`, `-medium`, `-low` và `gemini-3.6-flash-high`, `-medium`, `-low` (bỏ alias sang `-tiered`).
+  - Thêm alias Claude: `claude-3-7-sonnet` / `claude-3-5-sonnet` / `claude-3-5-haiku` -> `claude-sonnet-4-6`, `claude-3-7-opus` -> `claude-opus-4-6-thinking`.
+  - Cập nhật `ANTIGRAVITY_STATIC_MODELS` tương ứng.
+- **File:** `open-sse/executors/antigravity.js`
+  - Thêm `enabledCreditTypes: ["GOOGLE_ONE_AI"]` vào payload `transformRequest`.
+  - Thêm failover sang URL kế tiếp trong `ANTIGRAVITY_BASE_URLS` khi gặp HTTP 404.
+  - Gắn header `Anthropic-Beta` khi gọi các model Claude qua Antigravity.
+- **File:** `src/mitm/config.js`
+  - Thêm `gemini-3.7-flash` và `gemini-3.6-flash` vào `MODEL_SYNONYMS.antigravity`.
+- **Files:** `tests/unit/antigravity-executor.test.js`, `tests/unit/antigravity-provider-metadata.test.js`
+  - Bổ sung unit tests cho `enabledCreditTypes`, `Anthropic-Beta`, failover khi 404 và alias metadata.
+
+### Verification
+
+- Vitest Antigravity suite (`antigravity-schema-ref`, `antigravity-executor`, `antigravity-stream-resume`, `bugs-antigravity`, `antigravity-provider-metadata`): **5 files passed**, **57 tests passed**.
+- Live E2E test gọi trực tiếp Google CloudCode API qua `AntigravityExecutor` trả về **HTTP 200** với stream thoughtSignature hợp lệ cho `gemini-3.7-flash`, `gemini-3.7-flash-thinking`, `gemini-3.7-flash-high` và `claude-3-7-sonnet`.
+
+---
+
 ## Sau sync upstream — Hoàn thiện regression và dashboard hydration
 
 ### Regression theo contract của fork

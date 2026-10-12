@@ -373,4 +373,53 @@ describe("AntigravityExecutor", () => {
     expect(translated.project).toMatch(/^[a-z]+-[a-z]+-[a-f0-9]{5}$/);
     expect(translated.project).toBe(generateProjectIdHelper("33327892"));
   });
+
+  it("includes enabledCreditTypes GOOGLE_ONE_AI in standard transformed request", () => {
+    const executor = new AntigravityExecutor();
+    const transformed = executor.transformRequest(
+      "gemini-3.7-flash",
+      body,
+      true,
+      credentials,
+    );
+    expect(transformed.enabledCreditTypes).toEqual(["GOOGLE_ONE_AI"]);
+  });
+
+  it("attaches Anthropic-Beta header for Claude models via Antigravity", () => {
+    const executor = new AntigravityExecutor();
+    const headers = executor.buildHeaders(credentials, true, "sess-1", "claude-sonnet-4-6");
+    expect(headers["Anthropic-Beta"]).toBe(
+      "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+    );
+
+    const nonClaudeHeaders = executor.buildHeaders(credentials, true, "sess-1", "gemini-3.7-flash");
+    expect(nonClaudeHeaders["Anthropic-Beta"]).toBeUndefined();
+  });
+
+  it("falls back to the next endpoint when an endpoint returns HTTP 404 NOT_FOUND", async () => {
+    const executor = new AntigravityExecutor();
+    proxyAwareFetch
+      .mockResolvedValueOnce({
+        status: 404,
+        headers: new Headers(),
+        text: async () => JSON.stringify({ error: { code: 404, message: "Requested entity was not found." } }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: new Headers(),
+        text: async () => "ok",
+      });
+
+    const result = await executor.execute({
+      model: "gemini-3.7-flash",
+      body,
+      stream: true,
+      credentials,
+      log,
+    });
+
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(2);
+    expect(result.response.status).toBe(200);
+    expect(result.url).toBe(`${ANTIGRAVITY_BASE_URLS[1]}/v1internal:streamGenerateContent?alt=sse`);
+  });
 });

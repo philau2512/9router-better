@@ -90,11 +90,11 @@ describe("Antigravity provider metadata", () => {
 
   it("exports valid model aliases for Gemini 3.6 & 3.7 Flash family", () => {
     const { ANTIGRAVITY_MODEL_ALIASES } = require("../../open-sse/providers/antigravity-provider-metadata.js");
-    expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.7-flash-high"]).toBe("gemini-3.7-flash-tiered");
-    expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.7-flash-medium"]).toBe("gemini-3.7-flash-tiered");
-    expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.7-flash-low"]).toBe("gemini-3.7-flash-tiered");
-    expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.6-flash-low"]).toBe("gemini-3.6-flash-tiered");
+    expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.7-flash"]).toBe("gemini-3.7-flash-high");
+    expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.7-flash-thinking"]).toBe("gemini-3.7-flash-high");
+    expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.6-flash"]).toBe("gemini-3.6-flash-high");
     expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.6-flash-agent"]).toBe("gemini-3-flash-agent");
     expect(ANTIGRAVITY_MODEL_ALIASES["gemini-3.6-flash-extra-low"]).toBe("gemini-3.5-flash-extra-low");
+    expect(ANTIGRAVITY_MODEL_ALIASES["claude-3-7-sonnet"]).toBe("claude-sonnet-4-6");
   });
 });
