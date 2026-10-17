@@ -31,17 +31,24 @@ export const ANTIGRAVITY_USAGE_ENDPOINT_SETS = {
 };
 
 export const ANTIGRAVITY_MODEL_ALIASES = {
+  "gemini-3.8-flash": "gemini-3.8-flash-tiered",
   "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
   "gemini-3.8-flash-medium": "gemini-3.8-flash-tiered",
   "gemini-3.8-flash-low": "gemini-3.8-flash-tiered",
-  "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
-  "gemini-3.7-flash-medium": "gemini-3.7-flash-tiered",
-  "gemini-3.7-flash-low": "gemini-3.7-flash-tiered",
+  "gemini-3.7-flash": "gemini-3.7-flash-high",
+  "gemini-3.7-flash-thinking": "gemini-3.7-flash-high",
+  "gemini-3.6-flash": "gemini-3.6-flash-high",
   "gemini-3.6-flash-agent": "gemini-3-flash-agent",
-  "gemini-3.6-flash-high": "gemini-3.6-flash-tiered",
-  "gemini-3.6-flash-medium": "gemini-3.6-flash-tiered",
-  "gemini-3.6-flash-low": "gemini-3.6-flash-tiered",
   "gemini-3.6-flash-extra-low": "gemini-3.5-flash-extra-low",
+  "claude-3-7-sonnet": "claude-sonnet-4-6",
+  "claude-3.7-sonnet": "claude-sonnet-4-6",
+  "claude-3-5-sonnet": "claude-sonnet-4-6",
+  "claude-3.5-sonnet": "claude-sonnet-4-6",
+  "claude-3-5-haiku": "claude-sonnet-4-6",
+  "claude-3.5-haiku": "claude-sonnet-4-6",
+  "claude-3-7-opus": "claude-opus-4-6-thinking",
+  "claude-3.7-opus": "claude-opus-4-6-thinking",
+  "claude-opus-4": "claude-opus-4-6-thinking",
 };
 
 export const ANTIGRAVITY_STATIC_MODELS = [
@@ -61,34 +68,39 @@ export const ANTIGRAVITY_STATIC_MODELS = [
     upstreamModelId: "gemini-3.8-flash-tiered(low)",
   },
   {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    upstreamModelId: "gemini-3.7-flash-high",
+  },
+  {
     id: "gemini-3.7-flash-high",
     name: "Gemini 3.7 Flash (High)",
-    upstreamModelId: "gemini-3.7-flash-tiered(high)",
+    upstreamModelId: "gemini-3.7-flash-high",
   },
   {
     id: "gemini-3.7-flash-medium",
     name: "Gemini 3.7 Flash (Medium)",
-    upstreamModelId: "gemini-3.7-flash-tiered(medium)",
+    upstreamModelId: "gemini-3.7-flash-medium",
   },
   {
     id: "gemini-3.7-flash-low",
     name: "Gemini 3.7 Flash (Low)",
-    upstreamModelId: "gemini-3.7-flash-tiered(low)",
+    upstreamModelId: "gemini-3.7-flash-low",
   },
   {
     id: "gemini-3.6-flash-high",
     name: "Gemini 3.6 Flash (High)",
-    upstreamModelId: "gemini-3.6-flash-tiered(high)",
+    upstreamModelId: "gemini-3.6-flash-high",
   },
   {
     id: "gemini-3.6-flash-medium",
     name: "Gemini 3.6 Flash (Medium)",
-    upstreamModelId: "gemini-3.6-flash-tiered(medium)",
+    upstreamModelId: "gemini-3.6-flash-medium",
   },
   {
     id: "gemini-3.6-flash-low",
     name: "Gemini 3.6 Flash (Low)",
-    upstreamModelId: "gemini-3.6-flash-tiered(low)",
+    upstreamModelId: "gemini-3.6-flash-low",
   },
   { id: "gemini-3.6-flash-agent", name: "Gemini 3.6 Flash (High)" },
   {

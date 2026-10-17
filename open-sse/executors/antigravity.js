@@ -157,7 +157,7 @@ export class AntigravityExecutor extends BaseExecutor {
     return `${baseUrl}/v1internal:${action}`;
   }
 
-  buildHeaders(credentials, stream = true, sessionId = null) {
+  buildHeaders(credentials, stream = true, sessionId = null, model = "") {
     return {
       "Content-Type": "application/json",
       Authorization: `Bearer ${credentials.accessToken}`,
@@ -165,6 +165,10 @@ export class AntigravityExecutor extends BaseExecutor {
         this.config.headers?.["User-Agent"] ||
         ANTIGRAVITY_HEADERS["User-Agent"],
       ...(sessionId && { "X-Machine-Session-Id": sessionId }),
+      ...(String(model || "").toLowerCase().includes("claude") && {
+        "Anthropic-Beta":
+          "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+      }),
       Accept: stream ? "text/event-stream" : "application/json",
     };
   }
@@ -387,6 +391,7 @@ export class AntigravityExecutor extends BaseExecutor {
       userAgent: "antigravity",
       requestType: "agent",
       requestId: `agent-${crypto.randomUUID()}`,
+      enabledCreditTypes: ["GOOGLE_ONE_AI"],
       request: transformedRequest,
     };
   }
@@ -625,7 +630,7 @@ export class AntigravityExecutor extends BaseExecutor {
         credentials,
       );
       const sessionId = transformedBody.request?.sessionId;
-      const headers = this.buildHeaders(credentials, stream, sessionId);
+      const headers = this.buildHeaders(credentials, stream, sessionId, model);
 
       // Initialize retry counters for this URL
       if (!retryAttemptsByUrl[urlIndex]) {
@@ -725,6 +730,18 @@ export class AntigravityExecutor extends BaseExecutor {
           if (urlIndex + 1 < fallbackCount) {
             continue;
           }
+        }
+
+        if (
+          response.status === HTTP_STATUS.NOT_FOUND &&
+          urlIndex + 1 < fallbackCount
+        ) {
+          log?.debug?.(
+            "RETRY",
+            `${response.status} Not Found on ${url}, trying fallback ${urlIndex + 1}`,
+          );
+          lastStatus = response.status;
+          continue;
         }
 
         if (this.shouldRetry(response.status, urlIndex)) {
