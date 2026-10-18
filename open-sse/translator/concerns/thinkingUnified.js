@@ -252,7 +252,11 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       if (canDisable) body.thinking = { type: "adaptive", ...(display ? { display } : {}) };
       else delete body.thinking;
       const level = toLevel(eff);
-      body.output_config = { effort: level === "xhigh" || level === "auto" ? "high" : level };
+      // xhigh is model-gated (Opus/Sonnet 4.6 reject it) — clamp when not advertised.
+      // Claude effort has no "minimal" (always-on models clamp "none" to it).
+      body.output_config = { effort: level === "auto" ? "high"
+        : level === "minimal" ? "low"
+        : level === "xhigh" && !supportedLevels?.includes("xhigh") ? "high" : level };
       break;
     }
     case "claude-budget": {
@@ -262,7 +266,10 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       break;
     }
     case "gemini-level": {
-      const level = none ? "minimal" : toGeminiThinkingLevel(eff);
+      let level = none ? "minimal" : toGeminiThinkingLevel(eff);
+      // Models without a "minimal" tier (Gemini 4) reject it with 400 — clamp to the lowest supported level.
+      const lowest = supportedLevels?.find((l) => l !== "none");
+      if (supportedLevels?.length && lowest && !supportedLevels.includes(level)) level = lowest;
       setGeminiThinking(body, { thinkingLevel: level, includeThoughts: level !== "minimal" });
       ensureGeminiOutputFloor(body, geminiLevelOutputFloor(level), caps);
       break;
@@ -328,6 +335,18 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       if (none && canDisable) break;
       const level = toLevel(eff);
       if (level) body.reasoning_effort = level === "xhigh" || level === "max" ? "high" : level;
+      break;
+    }
+    case "nous": {
+      // Nous's first-party client omits `reasoning` when disabled and sends a
+      // nested object when enabled. The API does not advertise top-level
+      // `reasoning_effort` for all models, so send nested `reasoning`.
+      if (none && canDisable) break;
+      const level = eff.mode === "auto" ? "medium" : toLevel(eff);
+      body.reasoning = {
+        enabled: true,
+        ...(level ? { effort: level } : {}),
+      };
       break;
     }
     case "tokenrouter": {

@@ -1,4 +1,5 @@
 import { buildModelsList, filterModelsForApiKey } from "../route.js";
+import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 
 // URL slug → service kind(s). `web` covers both webSearch and webFetch.
 const KIND_SLUG_MAP = {
@@ -44,6 +45,8 @@ export async function GET(request, { params }) {
     const identifier = path.filter(Boolean).join("/");
     const kindFilter = path.length === 1 ? KIND_SLUG_MAP[identifier] : null;
 
+    const keyAccess = await getKeyAccessContext(request);
+
     if (kindFilter) {
       const models = await buildModelsList(kindFilter);
       const { error, data } = await filterModelsForApiKey(request, models);
@@ -51,7 +54,8 @@ export async function GET(request, { params }) {
         { error: { message: error.message, type: "authentication_error", code: error.code } },
         { status: error.status },
       );
-      return json({ object: "list", data });
+      const filtered = await filterModelsListForKey(keyAccess, data);
+      return json({ object: "list", data: filtered });
     }
 
     // Match the same LLM catalog exposed by GET /v1/models. A catch-all
@@ -62,7 +66,8 @@ export async function GET(request, { params }) {
       { error: { message: error.message, type: "authentication_error", code: error.code } },
       { status: error.status },
     );
-    const matchedModel = data.find((candidate) => candidate.id === identifier);
+    const filtered = await filterModelsListForKey(keyAccess, data);
+    const matchedModel = filtered.find((candidate) => candidate.id === identifier);
 
     if (!matchedModel) {
       return json(

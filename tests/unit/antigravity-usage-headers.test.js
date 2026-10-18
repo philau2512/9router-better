@@ -14,6 +14,9 @@ const proxyAwareFetch = vi.fn(async (url) => ({
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch,
 }));
+vi.mock("open-sse/utils/proxyFetch.js", () => ({
+  proxyAwareFetch,
+}));
 
 describe("Antigravity usage headers", () => {
   beforeEach(() => proxyAwareFetch.mockClear());
@@ -26,7 +29,7 @@ describe("Antigravity usage headers", () => {
     // loadCodeAssist + fetchAvailableModels + retrieveUserQuotaSummary
     expect(proxyAwareFetch).toHaveBeenCalledTimes(3);
     for (const [, options] of proxyAwareFetch.mock.calls) {
-      expect(options.headers["User-Agent"]).toBe("antigravity/ide/2.11.0 darwin/arm64");
+      expect(options.headers["User-Agent"]).toBe("antigravity/ide/2.22.0 darwin/arm64");
       expect(options.headers).not.toHaveProperty("x-request-source");
     }
   });

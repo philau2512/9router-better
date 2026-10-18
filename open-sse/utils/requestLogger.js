@@ -98,6 +98,11 @@ function writeJsonFile(sessionPath, filename, data) {
 
 function createAsyncAppender(sessionPath) {
   let pending = Promise.resolve();
+  const chunkBuffers = new Map();
+  let bufferBytes = 0;
+  let flushTimer = null;
+  const FLUSH_THRESHOLD_BYTES = 16 * 1024;
+  const FLUSH_INTERVAL_MS = 50;
 
   const enqueue = (operation) => {
     pending = pending
@@ -107,18 +112,52 @@ function createAsyncAppender(sessionPath) {
       });
   };
 
+  const flushBuffers = () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    if (chunkBuffers.size === 0) return;
+    for (const [filename, parts] of chunkBuffers.entries()) {
+      if (parts.length === 0) continue;
+      const combined = parts.join("");
+      parts.length = 0;
+      const filePath = path.join(sessionPath, filename);
+      enqueue(() => fs.promises.appendFile(filePath, combined));
+    }
+    bufferBytes = 0;
+  };
+
+  const scheduleFlush = () => {
+    if (!flushTimer) {
+      flushTimer = setTimeout(flushBuffers, FLUSH_INTERVAL_MS);
+    }
+  };
+
   return {
     append(filename, chunk) {
-      if (!fs || !sessionPath) return;
-      const filePath = path.join(sessionPath, filename);
-      enqueue(() => fs.promises.appendFile(filePath, chunk));
+      if (!fs || !sessionPath || !chunk) return;
+      let parts = chunkBuffers.get(filename);
+      if (!parts) {
+        parts = [];
+        chunkBuffers.set(filename, parts);
+      }
+      parts.push(chunk);
+      bufferBytes += typeof chunk === "string" ? chunk.length : (chunk.byteLength || 0);
+      if (bufferBytes >= FLUSH_THRESHOLD_BYTES) {
+        flushBuffers();
+      } else {
+        scheduleFlush();
+      }
     },
     writeJson(filename, data) {
       if (!fs || !sessionPath) return;
+      flushBuffers();
       const filePath = path.join(sessionPath, filename);
       enqueue(() => fs.promises.writeFile(filePath, JSON.stringify(data, null, 2)));
     },
     flush() {
+      flushBuffers();
       return pending;
     },
   };

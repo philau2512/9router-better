@@ -70,7 +70,8 @@ export async function resolveConnectionProxyConfig(providerSpecificData = {}, op
         if (
           proxyPool.type === "vercel" ||
           proxyPool.type === "cloudflare" ||
-          proxyPool.type === "deno"
+          proxyPool.type === "deno" ||
+          proxyPool.type === "netlify"
         ) {
           return {
             source: proxyPool.type,

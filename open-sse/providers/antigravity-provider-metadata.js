@@ -53,6 +53,11 @@ export const ANTIGRAVITY_MODEL_ALIASES = {
 
 export const ANTIGRAVITY_STATIC_MODELS = [
   {
+    id: "gemini-4-argon-high",
+    name: "Gemini 4 Argon (High)",
+    upstreamModelId: "gemini-4-argon-high(high)",
+  },
+  {
     id: "gemini-3.8-flash-high",
     name: "Gemini 3.8 Flash (High)",
     upstreamModelId: "gemini-3.8-flash-tiered(high)",
@@ -115,6 +120,14 @@ export const ANTIGRAVITY_STATIC_MODELS = [
   },
   { id: "gemini-pro-agent", name: "Gemini 3.1 Pro (High)" },
   { id: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro (Low)" },
+  { id: "claude-sonnet-5-5-high", name: "Claude Sonnet 5.5 (High)", upstreamModelId: "claude-sonnet-5-5-high(high)" },
+  { id: "claude-sonnet-5-5-medium", name: "Claude Sonnet 5.5 (Medium)", upstreamModelId: "claude-sonnet-5-5-medium(medium)" },
+  { id: "claude-sonnet-5-5-low", name: "Claude Sonnet 5.5 (Low)", upstreamModelId: "claude-sonnet-5-5-low(low)" },
+  { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5 (Thinking)", upstreamModelId: "claude-sonnet-5-5-high(high)" },
+  { id: "claude-opus-5-5-high", name: "Claude Opus 5.5 (High)", upstreamModelId: "claude-opus-5-5-high(high)" },
+  { id: "claude-opus-5-5-medium", name: "Claude Opus 5.5 (Medium)", upstreamModelId: "claude-opus-5-5-medium(medium)" },
+  { id: "claude-opus-5-5-low", name: "Claude Opus 5.5 (Low)", upstreamModelId: "claude-opus-5-5-low(low)" },
+  { id: "claude-opus-5-5", name: "Claude Opus 5.5 (Thinking)", upstreamModelId: "claude-opus-5-5-high(high)" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (Thinking)" },
   {
     id: "claude-opus-4-6-thinking",

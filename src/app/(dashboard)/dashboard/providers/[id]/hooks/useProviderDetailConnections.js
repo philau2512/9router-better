@@ -95,6 +95,7 @@ export function useProviderDetailConnections({
   const [activeJsonConnection, setActiveJsonConnection] = useState(null);
   const [loadingJson, setLoadingJson] = useState(false);
   const [autoPingConnections, setAutoPingConnections] = useState({});
+  const [autoPingSchedules, setAutoPingSchedules] = useState({});
   const [savingAutoPingConnectionId, setSavingAutoPingConnectionId] =
     useState(null);
   const stopOneByOneRef = useRef(false);
@@ -155,6 +156,7 @@ export function useProviderDetailConnections({
         ? settingsData[autoPingSettingsKey] || {}
         : {};
       setAutoPingConnections(autoPingSettings.connections || {});
+      setAutoPingSchedules(autoPingSettings.schedules || {});
 
       if (nodesRes.ok) {
         let node =
@@ -442,6 +444,51 @@ export function useProviderDetailConnections({
     }
   };
 
+  const handleSaveAutoPing = async (connectionId, { reactive, schedule }) => {
+    const settingsKey = AUTO_PING_SETTINGS_KEYS[providerId];
+    if (!settingsKey) return;
+
+    const previousConnections = autoPingConnections;
+    const previousSchedules = autoPingSchedules;
+    const updatedConnections = {
+      ...previousConnections,
+      [connectionId]: reactive,
+    };
+    const updatedSchedules = {
+      ...previousSchedules,
+      [connectionId]: schedule,
+    };
+
+    setAutoPingConnections(updatedConnections);
+    setAutoPingSchedules(updatedSchedules);
+    setSavingAutoPingConnectionId(connectionId);
+    try {
+      const settings = await fetchProviderSettings();
+      const current = settings[settingsKey] || {};
+      const response = await patchProviderSettings({
+        [settingsKey]: {
+          ...current,
+          connections: {
+            ...(current.connections || {}),
+            [connectionId]: reactive,
+          },
+          schedules: {
+            ...(current.schedules || {}),
+            [connectionId]: schedule,
+          },
+        },
+      });
+      if (!response.ok) throw new Error("Failed to save auto-ping setting");
+    } catch (error) {
+      setAutoPingConnections(previousConnections);
+      setAutoPingSchedules(previousSchedules);
+      console.log("Error saving auto-ping setting:", error);
+      alert("Failed to save auto-ping setting");
+    } finally {
+      setSavingAutoPingConnectionId(null);
+    }
+  };
+
   const handleSwapPriority = async (index1, index2) => {
     const newConnections = [...connections];
     [newConnections[index1], newConnections[index2]] = [
@@ -476,7 +523,9 @@ export function useProviderDetailConnections({
         (connection.provider === "claude" || connection.provider === "codex"),
     );
     const enabledCount = eligibleConnections.filter(
-      (connection) => autoPingConnections[connection.id] === true,
+      (connection) =>
+        autoPingConnections[connection.id] === true ||
+        autoPingSchedules[connection.id]?.enabled === true,
     ).length;
 
     return {
@@ -486,7 +535,7 @@ export function useProviderDetailConnections({
         eligibleConnections.length > 0 &&
         enabledCount === eligibleConnections.length,
     };
-  }, [selectedConnections, autoPingConnections]);
+  }, [selectedConnections, autoPingConnections, autoPingSchedules]);
 
   const displayedConnectionIds = displayedConnections.map((conn) => conn.id);
   const allSelected =
@@ -1182,9 +1231,11 @@ export function useProviderDetailConnections({
     handleViewJson,
     setActiveJsonConnection,
     autoPingConnections,
+    autoPingSchedules,
     autoPingSelection,
     savingAutoPingConnectionId,
     handleToggleAutoPing,
+    handleSaveAutoPing,
     setSelectedConnectionsAutoPing,
   };
 }

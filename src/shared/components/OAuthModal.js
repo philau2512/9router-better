@@ -290,6 +290,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         "codebuddy-intl",
         "qoder",
         "grok-cli",
+        "minimax-code",
+        "minimax-code-global",
+        "nous",
       ];
       if (deviceCodeProviders.includes(provider)) {
         setIsDeviceCode(true);
@@ -332,9 +335,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
             }
           : (provider === "kimi" || provider === "kimi-coding")
           ? { _kimiDeviceId: data._kimiDeviceId }
+          : (provider === "minimax-code" || provider === "minimax-code-global")
+          ? { _minimaxPollByUser: data._minimaxPollByUser }
           : null;
         startPolling(
-          data.device_code,
+          // MiniMax's device-code variant returns no device_code: the token
+          // endpoint is polled with the user_code itself.
+          data.device_code || data.user_code,
           data.codeVerifier,
           data.interval || 5,
           extraData,

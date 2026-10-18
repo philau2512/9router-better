@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("open-sse/utils/proxyFetch.js", () => ({
+  proxyAwareFetch: vi.fn(),
+}));
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: vi.fn(),
 }));

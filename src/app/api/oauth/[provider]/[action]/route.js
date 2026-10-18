@@ -276,6 +276,7 @@ export async function GET(request, { params }) {
         "codebuddy-intl",
         "qoder",
         "grok-cli",
+        "nous",
       ];
       let deviceData;
       if (noPkceDeviceProviders.includes(provider)) {
@@ -546,6 +547,7 @@ export async function POST(request, { params }) {
         "kilocode",
         "codebuddy-cn",
         "codebuddy-intl",
+        "nous",
       ];
       let result;
       if (noPkceProviders.includes(provider)) {

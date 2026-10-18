@@ -15,6 +15,7 @@ import {
   getModelAliases,
 } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 
@@ -234,6 +235,10 @@ const parseOpenAIStyleModels = (data) => {
 // Matches provider IDs that are upstream/cross-instance connections (contain a UUID suffix)
 const UPSTREAM_CONNECTION_RE = /[-_][0-9a-f]{8,}$/i;
 
+// Header sent by fetchCompatibleModelIds to detect cross-instance /models fetches
+// and break recursive loops between 9router instances connected to each other.
+const INTERNAL_MODELS_FETCH_HEADER = "x-9r-internal-models-fetch";
+
 // LLM kind sentinel — combos/models with no explicit kind default to LLM
 const LLM_KIND = "llm";
 
@@ -441,6 +446,52 @@ export async function buildModelsList(kindFilter) {
         models.push({
           id: `${alias}/${model.id}`,
           object: "model",
+          owned_by: alias,
+        });
+      }
+    }
+
+    for (const [providerId, providerInfo] of Object.entries(AI_PROVIDERS)) {
+      if (!providerMatchesKinds(providerId, kindFilter)) continue;
+      const alias = getProviderAlias(providerId) || PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+      const subConfigModels = [];
+      if (
+        kindFilter.includes("tts") &&
+        Array.isArray(providerInfo?.ttsConfig?.models)
+      ) {
+        for (const m of providerInfo.ttsConfig.models) {
+          if (m?.id) subConfigModels.push(m.id);
+        }
+      }
+      if (
+        kindFilter.includes("embedding") &&
+        Array.isArray(providerInfo?.embeddingConfig?.models)
+      ) {
+        for (const m of providerInfo.embeddingConfig.models) {
+          if (m?.id) subConfigModels.push(m.id);
+        }
+      }
+      for (const subId of subConfigModels) {
+        if (isDisabled(alias, subId)) continue;
+        models.push({
+          id: `${alias}/${subId}`,
+          object: "model",
+          owned_by: alias,
+        });
+      }
+      if (kindFilter.includes("webSearch") && providerInfo?.searchConfig) {
+        models.push({
+          id: `${alias}/search`,
+          object: "model",
+          kind: "webSearch",
+          owned_by: alias,
+        });
+      }
+      if (kindFilter.includes("webFetch") && providerInfo?.fetchConfig) {
+        models.push({
+          id: `${alias}/fetch`,
+          object: "model",
+          kind: "webFetch",
           owned_by: alias,
         });
       }
@@ -700,7 +751,8 @@ export async function OPTIONS() {
  */
 export async function GET(request) {
   try {
-    const models = await buildModelsList([LLM_KIND]);
+    const skipDynamicFetch = request?.headers?.get(INTERNAL_MODELS_FETCH_HEADER) === "1";
+    const models = await buildModelsList([LLM_KIND], { skipDynamicFetch });
     const { error, data } = await filterModelsForApiKey(request, models);
     if (error) {
       return Response.json(
@@ -708,8 +760,12 @@ export async function GET(request) {
         { status: error.status, headers: { "Access-Control-Allow-Origin": "*" } },
       );
     }
+    const filteredData = await filterModelsListForKey(
+      await getKeyAccessContext(request),
+      data
+    );
     return Response.json(
-      { object: "list", data },
+      { object: "list", data: filteredData },
       {
         headers: { "Access-Control-Allow-Origin": "*" },
       },

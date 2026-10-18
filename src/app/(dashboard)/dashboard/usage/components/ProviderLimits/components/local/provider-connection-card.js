@@ -9,6 +9,7 @@ import Tooltip from "@/shared/components/Tooltip";
 import QuotaTable from "../../QuotaTable";
 import AntigravityQuotaGroups from "./antigravity-quota-groups";
 import { useState } from "react";
+import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
 import {
   getConnectionLabel,
   getCodexResetCreditCount,
@@ -30,7 +31,9 @@ export default function ProviderConnectionCard({
   resettingLimitId,
   autoPingSaving,
   autoPingEnabled,
+  autoPingSchedule,
   onToggleAutoPing,
+  onConfigureAutoPing,
   refreshProvider,
   setSelectedConnection,
   setShowEditModal,
@@ -197,21 +200,39 @@ export default function ProviderConnectionCard({
               </>
             )}
             {(conn.provider === "claude" || conn.provider === "codex") &&
-              conn.authType === "oauth" && (
-              <Tooltip text={autoPingEnabled ? "Disable quota auto-ping" : "Enable quota auto-ping after reset"}>
-                <button
-                  type="button"
-                  onClick={() => onToggleAutoPing(conn)}
-                  disabled={isLoading || rowBusy || isResettingLimit || autoPingSaving}
-                  aria-label="Toggle quota auto-ping"
-                  className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPingEnabled ? "text-primary" : "text-text-muted"}`}
-                >
-                  <span className={`material-symbols-outlined text-[18px] ${autoPingSaving ? "animate-spin" : ""}`}>
-                    {autoPingSaving ? "progress_activity" : "bolt"}
-                  </span>
-                </button>
-              </Tooltip>
-            )}
+              conn.authType === "oauth" && (() => {
+              const isReactive = autoPingEnabled === true;
+              const isSchedule = autoPingSchedule?.enabled === true;
+              const isActive = isReactive || isSchedule;
+
+              const activeModes = [];
+              if (isReactive) activeModes.push("On reset");
+              if (isSchedule) {
+                const summary = getScheduleSlotLabels(autoPingSchedule).join(" / ");
+                activeModes.push(`Scheduled (${summary || "active"})`);
+              }
+              const tooltipText = activeModes.length > 0
+                ? `Auto-ping active: ${activeModes.join(" + ")}. Click to configure.`
+                : conn.provider === "codex"
+                  ? "Auto-starts the next 5h Codex window after reset or on schedule. Click to configure."
+                  : "Auto-starts a new window on quota reset or fixed schedule. Click to configure.";
+
+              return (
+                <Tooltip text={tooltipText}>
+                  <button
+                    type="button"
+                    onClick={() => onConfigureAutoPing ? onConfigureAutoPing(conn) : onToggleAutoPing(conn)}
+                    disabled={isLoading || rowBusy || isResettingLimit || autoPingSaving}
+                    aria-label="Configure quota auto-ping"
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${isActive ? "text-primary" : "text-text-muted"}`}
+                  >
+                    <span className={`material-symbols-outlined text-[18px] ${autoPingSaving ? "animate-spin" : ""}`}>
+                      {autoPingSaving ? "progress_activity" : "bolt"}
+                    </span>
+                  </button>
+                </Tooltip>
+              );
+            })()}
             <div className="flex items-center gap-0.5">
               <button
                 type="button"

@@ -39,6 +39,7 @@ for (const entry of REGISTRY) {
     const existing = PROVIDERS[entry.id] || {};
     PROVIDERS[entry.id] = {
       format: existing.format || entry.transport.format || "openai",
+      transports: entry.transports || existing.transports,
       ...entry.transport,
       ...existing,
       headers: {

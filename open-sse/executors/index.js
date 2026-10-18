@@ -26,6 +26,8 @@ import ZedExecutor from "./zed.js";
 import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
 import { DevinCliExecutor } from "./devin-cli.js";
+import { BedrockExecutor } from "./bedrock.js";
+import { MinimaxCodeExecutor } from "./minimax-code.js";
 
 const executors = {
   antigravity: new AntigravityExecutor(),
@@ -61,6 +63,14 @@ const executors = {
   zed: new ZedExecutor(),
   windsurf: new WindsurfExecutor(),
   "devin-cli": new DevinCliExecutor(),
+  bedrock: new BedrockExecutor(),
+  br: new BedrockExecutor(), // Alias for bedrock
+  "bedrock-xai": new BedrockExecutor("bedrock-xai"),
+  brx: new BedrockExecutor("bedrock-xai"), // Alias for bedrock-xai
+  "minimax-code": new MinimaxCodeExecutor("minimax-code"),
+  mm: new MinimaxCodeExecutor("minimax-code"), // Alias for minimax-code
+  "minimax-code-global": new MinimaxCodeExecutor("minimax-code-global"),
+  mmg: new MinimaxCodeExecutor("minimax-code-global"), // Alias for minimax-code-global
 };
 
 const defaultCache = new Map();
@@ -78,6 +88,7 @@ export function hasSpecializedExecutor(provider) {
 
 export { BaseExecutor } from "./base.js";
 export { AntigravityExecutor } from "./antigravity.js";
+export { BedrockExecutor } from "./bedrock.js";
 export { AzureExecutor } from "./azure.js";
 export { GeminiCLIExecutor } from "./gemini-cli.js";
 export { GithubExecutor } from "./github.js";

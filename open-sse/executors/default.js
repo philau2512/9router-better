@@ -1,9 +1,10 @@
 import { BaseExecutor } from "./base.js";
+import { randomUUID } from "node:crypto";
 import { PROVIDERS } from "../config/providers.js";
 import { PROVIDER_OAUTH } from "../providers/index.js";
 import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
-import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
+import { OAUTH_ENDPOINTS, buildKimiHeaders, NOUS_ATTRIBUTION } from "../config/appConstants.js";
 import { buildClineHeaders } from "../shared/clineAuth.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { getCachedClaudeHeaders } from "../utils/claudeHeaderCache.js";
@@ -42,6 +43,14 @@ function applyAuth(headers, desc, credentials) {
 const HEADER_HOOKS = {
   // Stable device_id from OAuth connection (CLIProxyAPI KimiTokenStorage.DeviceID)
   kimiHeaders: (h, c) => Object.assign(h, buildKimiHeaders(c?.providerSpecificData?.deviceId)),
+  // MiniMax Code (mcode): the placeholder x-api-key rides every request next
+  // to the Bearer token, plus per-request session/timezone headers. Static
+  // teammates (User-Agent, X-Mavis-Agent-Id) live in the registry transport.
+  minimaxHeaders: (h) => {
+    h["x-api-key"] = "sk-xxx";
+    h["X-Mavis-Timezone-Offset"] = String(new Date().getTimezoneOffset() * -60);
+    if (!h["X-Mavis-Session-Id"]) h["X-Mavis-Session-Id"] = randomUUID();
+  },
   clineHeaders: (h, c) => Object.assign(h, buildClineHeaders(c.apiKey || c.accessToken)),
   kilocodeOrg: (h, c) => { if (c.providerSpecificData?.orgId) h["X-Kilocode-OrganizationID"] = c.providerSpecificData.orgId; },
 };
@@ -69,8 +78,10 @@ export class DefaultExecutor extends BaseExecutor {
     super(provider, PROVIDERS[provider] || PROVIDERS.openai);
   }
 
-  transformRequest(model, body, stream = false) {
-    const transformed = this.applyJsonSchemaFallback(body);
+  transformRequest(model, body, stream = false, credentials = null) {
+    const transformed = this.applyJsonSchemaFallback(
+      this.applyNousAttribution(model, body, stream, credentials),
+    );
 
     if (
       stream &&
@@ -92,6 +103,47 @@ export class DefaultExecutor extends BaseExecutor {
     }
 
     return injectReasoningContent({ provider: this.provider, model, body: transformed });
+  }
+
+  applyNousAttribution(model, body, stream, credentials) {
+    if (
+      !this.provider?.startsWith?.("openai-compatible-") ||
+      !credentials?.apiKey ||
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      (body.tags != null && !Array.isArray(body.tags))
+    )
+      return body;
+
+    try {
+      const url = new URL(this.buildUrl(model, stream, 0, credentials));
+      if (
+        url.protocol !== "https:" ||
+        url.hostname !== NOUS_ATTRIBUTION.hostname ||
+        url.pathname !== NOUS_ATTRIBUTION.chatCompletionsPath
+      )
+        return body;
+    } catch {
+      return body;
+    }
+
+    let tags = Array.isArray(body.tags) ? [...body.tags] : [];
+    for (const fallback of NOUS_ATTRIBUTION.tags) {
+      const prefix = fallback.slice(0, fallback.indexOf("=") + 1);
+      // Empty attribution values do not satisfy the upstream requirement.
+      tags = tags.filter(
+        (tag) =>
+          typeof tag !== "string" ||
+          !tag.startsWith(prefix) ||
+          tag.slice(prefix.length).trim(),
+      );
+      if (
+        !tags.some((tag) => typeof tag === "string" && tag.startsWith(prefix))
+      )
+        tags.push(fallback);
+    }
+    return { ...body, tags: [...new Set(tags)] };
   }
 
   // Fallback json_schema → json_object for openai-compatible providers without native Structured Output.
