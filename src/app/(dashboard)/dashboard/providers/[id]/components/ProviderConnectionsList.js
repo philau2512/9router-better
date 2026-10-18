@@ -1,4 +1,5 @@
 import ConnectionRow from "./ConnectionRow";
+import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
 
 export default function ProviderConnectionsList({
   displayedConnections,
@@ -20,8 +21,10 @@ export default function ProviderConnectionsList({
   handleWarmupSingle,
   onViewJson,
   autoPingConnections,
+  autoPingSchedules = {},
   savingAutoPingConnectionId,
   onToggleAutoPing,
+  onConfigureAutoPingSchedule = null,
 }) {
   return (
     <div className="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03]">
@@ -72,7 +75,20 @@ export default function ProviderConnectionsList({
                   (conn.provider === "claude" || conn.provider === "codex") &&
                   conn.authType === "oauth"
                     ? {
-                        on: autoPingConnections[conn.id] === true,
+                        isActive:
+                          autoPingConnections[conn.id] === true ||
+                          autoPingSchedules?.[conn.id]?.enabled === true,
+                        reactiveOn: autoPingConnections[conn.id] === true,
+                        scheduleOn: autoPingSchedules?.[conn.id]?.enabled === true,
+                        scheduleSummary: autoPingSchedules?.[conn.id]
+                          ? getScheduleSlotLabels(autoPingSchedules[conn.id]).join(" / ")
+                          : "",
+                        onConfigure: onConfigureAutoPingSchedule
+                          ? () => onConfigureAutoPingSchedule(conn)
+                          : null,
+                        on:
+                          autoPingConnections[conn.id] === true ||
+                          autoPingSchedules?.[conn.id]?.enabled === true,
                         onToggle: (enabled) => onToggleAutoPing(conn.id, enabled),
                         saving: savingAutoPingConnectionId === conn.id,
                         provider: conn.provider,

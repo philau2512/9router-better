@@ -56,6 +56,7 @@ function ensureGeminiOutputFloor(generationConfig, floor) {
   }
 }
 import { ROLE, GEMINI_ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { isGemini4Model } from "../../providers/capabilities.js";
 
 // Sanitize function names for Gemini API.
 // Gemini requires: starts with [a-zA-Z_], followed by [a-zA-Z0-9_.:\-], max 64 chars.
@@ -70,6 +71,32 @@ function sanitizeGeminiFunctionName(name) {
   }
   // Truncate to 64 chars
   return sanitized.substring(0, 64);
+}
+
+/**
+ * Rewrites duplicate tool_call_ids so every emitted functionCall id is unique.
+ *
+ * Gemini validates functionCall id uniqueness across the WHOLE history and
+ * answers 400 INVALID_ARGUMENT otherwise, but an OpenAI tool_call_id is only
+ * unique within its own assistant turn — a long agent session can replay the
+ * same id in a later turn (#4532).
+ */
+function createToolCallIdUniquifier() {
+  const used = new Set();
+  return {
+    next(id) {
+      if (!id) return id;
+      if (!used.has(id)) {
+        used.add(id);
+        return id;
+      }
+      let n = 2;
+      let candidate = `${id}-${n}`;
+      while (used.has(candidate)) candidate = `${id}-${n++}`;
+      used.add(candidate);
+      return candidate;
+    },
+  };
 }
 
 function contentHasFunctionResponse(content) {
@@ -93,12 +120,20 @@ function resolveThoughtSignature(toolCall, fallback) {
   return typeof sig === "string" && sig.length > 0 ? sig : fallback;
 }
 
+// Gemini 4 rejects a merged user turn whose last part is not a functionResponse (#4802)
+function moveFunctionResponsesLast(parts) {
+  const responses = parts.filter((p) => p.functionResponse);
+  if (!responses.length) return parts;
+  return [...parts.filter((p) => !p.functionResponse), ...responses];
+}
+
 // Upstream fix from open-sse commit 8d1db46be
 // Merge adjacent same-role blocks and strip empty parts before sending to
 // Gemini, avoiding 400 INVALID_ARGUMENT on consecutive same-role messages.
 // Do NOT merge functionResponse turns with follow-up user text — that shape
 // triggers empty STOP on Antigravity/Gemini tool loops.
-function normalizeGeminiContents(contents) {
+function normalizeGeminiContents(contents, model = null) {
+  const frLast = isGemini4Model(model);
   const out = [];
   for (const c of contents || []) {
     if (!c?.role || !Array.isArray(c.parts) || c.parts.length === 0) continue;
@@ -111,6 +146,7 @@ function normalizeGeminiContents(contents) {
         (contentHasPlainText(last) && contentHasFunctionResponse(c));
       if (!mixedFrAndText) {
         last.parts.push(...parts);
+        if (frLast) last.parts = moveFunctionResponsesLast(last.parts);
         continue;
       }
       // If we cannot merge because one is functionResponse and one is text,
@@ -122,7 +158,8 @@ function normalizeGeminiContents(contents) {
         out.push({ role: "user", parts: [{ text: "..." }] });
       }
     }
-    out.push({ ...c, parts: [...parts] });
+    const finalParts = frLast && c.role === "user" ? moveFunctionResponsesLast(parts) : parts;
+    out.push({ ...c, parts: [...finalParts] });
   }
   return out;
 }
@@ -142,14 +179,15 @@ function openaiToGeminiBase(
     safetySettings: DEFAULT_SAFETY_SETTINGS,
   };
 
-  // Generation config
-  if (body.temperature !== undefined) {
+  // Generation config — Gemini 4 removed the sampling params, forwarding them fails the request
+  const allowSampling = !isGemini4Model(model);
+  if (allowSampling && body.temperature !== undefined) {
     result.generationConfig.temperature = body.temperature;
   }
-  if (body.top_p !== undefined) {
+  if (allowSampling && body.top_p !== undefined) {
     result.generationConfig.topP = body.top_p;
   }
-  if (body.top_k !== undefined) {
+  if (allowSampling && body.top_k !== undefined) {
     result.generationConfig.topK = body.top_k;
   }
   if (body.max_tokens !== undefined) {
@@ -175,10 +213,12 @@ function openaiToGeminiBase(
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       if (msg.role === "tool" && msg.tool_call_id) {
-        toolResponses[msg.tool_call_id] = msg.content;
+        (toolResponses[msg.tool_call_id] ||= []).push(msg.content);
       }
     }
   }
+  const toolResponseCursor = {};
+  const toolCallIdUniquifier = createToolCallIdUniquifier();
 
   // Convert messages
   if (body.messages && Array.isArray(body.messages)) {
@@ -246,16 +286,17 @@ function openaiToGeminiBase(
               resolveThoughtSignature(tc, cachedSignature) ||
               (!firstFunctionCallSeen ? signature : undefined);
             firstFunctionCallSeen = true;
+            const emitId = toolCallIdUniquifier.next(tc.id);
             const part = {
               functionCall: {
-                id: tc.id,
+                id: emitId,
                 name: sanitizedName,
                 args,
               },
             };
             if (callSignature) part.thoughtSignature = callSignature;
             parts.push(part);
-            toolCallsList.push({ id: tc.id, name: sanitizedName });
+            toolCallsList.push({ origId: tc.id, emitId, name: sanitizedName });
           }
 
           if (parts.length > 0) {
@@ -271,27 +312,33 @@ function openaiToGeminiBase(
           ) {
             const toolMsg = body.messages[nextIdx];
             if (toolMsg.tool_call_id) {
-              localToolResponses[toolMsg.tool_call_id] = toolMsg.content;
+              (localToolResponses[toolMsg.tool_call_id] ||= []).push(toolMsg.content);
             }
             nextIdx++;
           }
 
           // Check if there are actual tool responses in the next messages
           const hasActualResponses = toolCallsList.some(
-            (tc) =>
-              localToolResponses[tc.id] !== undefined ||
-              toolResponses[tc.id] !== undefined,
+            ({ origId }) =>
+              (localToolResponses[origId]?.length ?? 0) > 0 ||
+              (toolResponseCursor[origId] || 0) < (toolResponses[origId]?.length ?? 0),
           );
           const isIntermediate = i < body.messages.length - 1;
 
           if (hasActualResponses || isIntermediate) {
             const toolParts = [];
-            for (const tc of toolCallsList) {
-              let resp =
-                localToolResponses[tc.id] !== undefined
-                  ? localToolResponses[tc.id]
-                  : toolResponses[tc.id];
-              if (resp === undefined) resp = "";
+            for (const { origId, emitId, name } of toolCallsList) {
+              let resp = "";
+              if (localToolResponses[origId]?.length) {
+                resp = localToolResponses[origId].shift();
+              } else {
+                const queue = toolResponses[origId];
+                const cursor = toolResponseCursor[origId] || 0;
+                if (queue && cursor < queue.length) {
+                  resp = queue[cursor];
+                  toolResponseCursor[origId] = cursor + 1;
+                }
+              }
 
               let parsedResp = tryParseJSON(resp);
               if (parsedResp === null) {
@@ -302,8 +349,8 @@ function openaiToGeminiBase(
 
               toolParts.push({
                 functionResponse: {
-                  id: tc.id,
-                  name: tc.name,
+                  id: emitId,
+                  name: sanitizeGeminiFunctionName(name),
                   response: { result: sanitizeFunctionResponseData(parsedResp) },
                 },
               });
@@ -355,7 +402,7 @@ function openaiToGeminiBase(
 
   // Upstream fix from open-sse commit 8d1db46be
   // Normalize contents to prevent 400 invalid_argument on consecutive same-role messages
-  result.contents = normalizeGeminiContents(result.contents);
+  result.contents = normalizeGeminiContents(result.contents, model);
 
   return result;
 }
@@ -662,6 +709,7 @@ function wrapInCloudCodeEnvelopeForClaude(
   // Normalize contents to prevent 400 invalid_argument on consecutive same-role messages
   envelope.request.contents = normalizeGeminiContents(
     envelope.request.contents,
+    model,
   );
 
   return envelope;

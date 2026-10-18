@@ -23,6 +23,7 @@ import { ANTIGRAVITY_OAUTH_CLIENT } from "open-sse/providers/shared.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
+import { NOUS_MODELS_URL, normalizeNousModels } from "open-sse/services/nous.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import {
@@ -104,6 +105,16 @@ const createOpenAIModelsConfig = (url) => ({
   authPrefix: "Bearer ",
   parseResponse: parseOpenAIStyleModels,
 });
+
+const normalizeRoutedNousModels = (data) =>
+  normalizeNousModels(data).map((model) => ({
+    ...model,
+    // Live upstream IDs include a vendor namespace (for example,
+    // stepfun/step-5-preview:free). Prefix the owning 9router provider so Basic
+    // Chat does not parse that namespace as the provider itself.
+    id: `nous/${model.id}`,
+    upstreamModelId: model.id,
+  }));
 
 const resolveQwenModelsUrl = (connection) => {
   const fallback = "https://portal.qwen.ai/v1/models";
@@ -308,6 +319,10 @@ const PROVIDER_MODELS_CONFIG = {
   },
   openai: createOpenAIModelsConfig("https://api.openai.com/v1/models"),
   openrouter: createOpenAIModelsConfig("https://openrouter.ai/api/v1/models"),
+  nous: {
+    ...createOpenAIModelsConfig(NOUS_MODELS_URL),
+    parseResponse: normalizeRoutedNousModels,
+  },
   anthropic: {
     url: "https://api.anthropic.com/v1/models",
     method: "GET",

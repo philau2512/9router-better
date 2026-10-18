@@ -36,6 +36,7 @@ import {
   updateProviderNode,
 } from "./utils/providerDetailPageApi";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
+import AutoPingScheduleModal from "./AutoPingScheduleModal";
 
 function getHeaderIconPath(
   providerInfo,
@@ -264,9 +265,11 @@ export default function ProviderDetailPage() {
     handleViewJson,
     setActiveJsonConnection,
     autoPingConnections,
+    autoPingSchedules,
     autoPingSelection,
     savingAutoPingConnectionId,
     handleToggleAutoPing,
+    handleSaveAutoPing,
     setSelectedConnectionsAutoPing,
   } = useProviderDetailConnections({
     providerId,
@@ -275,6 +278,7 @@ export default function ProviderDetailPage() {
     onThinkingModeLoaded: setThinkingMode,
   });
 
+  const [scheduleConnection, setScheduleConnection] = useState(null);
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
 
   const handleRefreshLiveModels = useCallback(async () => {
@@ -601,8 +605,10 @@ export default function ProviderDetailPage() {
         onOpenGrokBulkImport={() => setShowBulkImportGrokCli(true)}
         onViewJson={handleViewJson}
         autoPingConnections={autoPingConnections}
+        autoPingSchedules={autoPingSchedules}
         savingAutoPingConnectionId={savingAutoPingConnectionId}
         handleToggleAutoPing={handleToggleAutoPing}
+        onConfigureAutoPingSchedule={setScheduleConnection}
         setSelectedConnectionsAutoPing={setSelectedConnectionsAutoPing}
         autoPingSaving={savingAutoPingConnectionId === "bulk"}
         autoPingSelection={autoPingSelection}
@@ -812,6 +818,17 @@ export default function ProviderDetailPage() {
           isOpen={showBulkImportGrokCli}
           onClose={() => setShowBulkImportGrokCli(false)}
           onSuccess={fetchConnections}
+        />
+      )}
+
+      {scheduleConnection && (
+        <AutoPingScheduleModal
+          isOpen={!!scheduleConnection}
+          onClose={() => setScheduleConnection(null)}
+          connection={scheduleConnection}
+          reactive={autoPingConnections[scheduleConnection.id] === true}
+          schedule={autoPingSchedules?.[scheduleConnection.id] || null}
+          onSave={(result) => handleSaveAutoPing(scheduleConnection.id, result)}
         />
       )}
     </div>

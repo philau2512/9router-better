@@ -128,6 +128,11 @@ import p119 from "./selfhosted-embedding.js";
 import p120 from "./fish-audio.js";
 import p121 from "./alitp-intl.js";
 import p122 from "./xquik.js";
+import p_bedrock from "./bedrock.js";
+import p_bedrock_xai from "./bedrock-xai.js";
+import p_minimax_code from "./minimax-code.js";
+import p_minimax_code_global from "./minimax-code-global.js";
+import p_nous from "./nous.js";
 export default [
   p_agnes,
   p_atria,
@@ -256,4 +261,9 @@ export default [
   p120,
   p121,
   p122,
+  p_bedrock,
+  p_bedrock_xai,
+  p_minimax_code,
+  p_minimax_code_global,
+  p_nous,
 ];

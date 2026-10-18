@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Card from "@/shared/components/Card";
 import { ConfirmModal, EditConnectionModal } from "@/shared/components";
+import AutoPingScheduleModal from "@/app/(dashboard)/dashboard/providers/[id]/AutoPingScheduleModal";
 import { useProviderLimits } from "./hooks/local/use-provider-limits";
 import ProviderLimitsHeader from "./components/local/provider-limits-header";
 import ProviderConnectionCard from "./components/local/provider-connection-card";
@@ -19,7 +21,7 @@ export default function ProviderLimits() {
     copied, copy, quotaData, loading, errors, autoRefresh, setAutoRefresh,
     refreshingAll, countdown, connectionsLoading, deletingId, togglingId,
     resettingLimitId, autoPingSavingId, resetConfirmState, setResetConfirmState,
-    autoPingMaps, toggleAutoPing, resetCreditsState, setResetCreditsState,
+    autoPingMaps, autoPingConfigs, toggleAutoPing, handleSaveAutoPing, resetCreditsState, setResetCreditsState,
     showEditModal, setShowEditModal, selectedConnection, setSelectedConnection,
     proxyPools, providerFilter, setProviderFilter, providerOptions, accountFilter,
     setAccountFilter, searchInput, setSearchInput, searchQuery, quotaSortMode,
@@ -31,6 +33,8 @@ export default function ProviderLimits() {
     handleUpdateConnection, handleDisableDepleted, handleEnableAvailable,
     sortedConnections,
   } = state;
+
+  const [scheduleConnection, setScheduleConnection] = useState(null);
 
   const hasEligibleConnections = totals.eligibleConnections > 0;
   const hasVisibleConnections = sortedConnections.length > 0;
@@ -51,7 +55,7 @@ export default function ProviderLimits() {
 
   return <div className="space-y-6">
     <ProviderLimitsHeader providerFilter={providerFilter} setProviderFilter={setProviderFilter} providerMenuOpen={providerMenuOpen} setProviderMenuOpen={setProviderMenuOpen} providerOptions={providerOptions} accountFilter={accountFilter} setAccountFilter={setAccountFilter} searchInput={searchInput} setSearchInput={setSearchInput} quotaSortMode={quotaSortMode} setQuotaSortMode={setQuotaSortMode} expiringFirst={expiringFirst} setExpiringFirst={setExpiringFirst} bulkToggling={bulkToggling} handleDisableDepleted={handleDisableDepleted} handleEnableAvailable={handleEnableAvailable} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} countdown={countdown} refreshingAll={refreshingAll} refreshAll={refreshAll} setPage={setPage} />
-    {hasVisibleConnections ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{sortedConnections.map((conn) => <ProviderConnectionCard key={conn.id} conn={conn} quota={quotaData[conn.id]} isLoading={loading[conn.id]} error={errors[conn.id]} deletingId={deletingId} togglingId={togglingId} copied={copied} copy={copy} handleViewCodexResetCredits={handleViewCodexResetCredits} onRequestCodexReset={(connection, resetCreditCount) => setResetConfirmState({ connection, resetCreditCount })} resettingLimitId={resettingLimitId} autoPingSaving={autoPingSavingId === conn.id} autoPingEnabled={autoPingMaps[conn.provider]?.[conn.id] === true} onToggleAutoPing={toggleAutoPing} refreshProvider={refreshProvider} setSelectedConnection={setSelectedConnection} setShowEditModal={setShowEditModal} handleDeleteConnection={handleDeleteConnection} handleToggleConnectionActive={handleToggleConnectionActive} quotaSortMode={quotaSortMode} />)}</div> : <Card padding="lg"><div className="py-12 text-center"><span className="material-symbols-outlined text-[64px] text-text-muted opacity-20">filter_alt_off</span><h3 className="mt-4 text-lg font-semibold text-text-primary">No Accounts Match Current Filters</h3><p className="mx-auto mt-2 max-w-md text-sm text-text-muted">Try changing the current filters or search.</p></div></Card>}
+    {hasVisibleConnections ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{sortedConnections.map((conn) => <ProviderConnectionCard key={conn.id} conn={conn} quota={quotaData[conn.id]} isLoading={loading[conn.id]} error={errors[conn.id]} deletingId={deletingId} togglingId={togglingId} copied={copied} copy={copy} handleViewCodexResetCredits={handleViewCodexResetCredits} onRequestCodexReset={(connection, resetCreditCount) => setResetConfirmState({ connection, resetCreditCount })} resettingLimitId={resettingLimitId} autoPingSaving={autoPingSavingId === conn.id} autoPingEnabled={autoPingMaps[conn.provider]?.[conn.id] === true} autoPingSchedule={autoPingConfigs[conn.provider]?.schedules?.[conn.id]} onToggleAutoPing={toggleAutoPing} onConfigureAutoPing={(connection) => setScheduleConnection(connection)} refreshProvider={refreshProvider} setSelectedConnection={setSelectedConnection} setShowEditModal={setShowEditModal} handleDeleteConnection={handleDeleteConnection} handleToggleConnectionActive={handleToggleConnectionActive} quotaSortMode={quotaSortMode} />)}</div> : <Card padding="lg"><div className="py-12 text-center"><span className="material-symbols-outlined text-[64px] text-text-muted opacity-20">filter_alt_off</span><h3 className="mt-4 text-lg font-semibold text-text-primary">No Accounts Match Current Filters</h3><p className="mx-auto mt-2 max-w-md text-sm text-text-muted">Try changing the current filters or search.</p></div></Card>}
     <div className="rounded-xl border border-black/10 bg-black/[0.02] px-3 py-2 dark:border-white/10 dark:bg-white/[0.03]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-text-muted">{connectionsPageSummary}</span>
@@ -131,5 +135,15 @@ export default function ProviderLimits() {
     <ConfirmModal isOpen={Boolean(resetConfirmState)} onClose={() => { if (!resettingLimitId) setResetConfirmState(null); }} onConfirm={async () => { const connection = resetConfirmState?.connection; if (connection) { await handleResetCodexLimit(connection); setResetConfirmState(null); } }} title="Reset Codex limit?" message={`Use 1 Codex reset credit for ${resetConfirmState?.connection?.email || resetConfirmState?.connection?.name || "this account"}. This cannot be undone. Remaining credits: ${resetConfirmState?.resetCreditCount ?? 0}.`} confirmText="Reset limit" cancelText="Cancel" variant="danger" loading={Boolean(resettingLimitId)} />
     <CodexResetCreditsModal resetCreditsState={resetCreditsState} setResetCreditsState={setResetCreditsState} />
     <EditConnectionModal isOpen={showEditModal} connection={selectedConnection} proxyPools={proxyPools} onSave={handleUpdateConnection} onClose={() => { setShowEditModal(false); setSelectedConnection(null); }} />
+    {scheduleConnection && (
+      <AutoPingScheduleModal
+        isOpen={!!scheduleConnection}
+        onClose={() => setScheduleConnection(null)}
+        connection={scheduleConnection}
+        reactive={autoPingConfigs[scheduleConnection.provider]?.connections?.[scheduleConnection.id] === true}
+        schedule={autoPingConfigs[scheduleConnection.provider]?.schedules?.[scheduleConnection.id] || null}
+        onSave={(result) => handleSaveAutoPing(scheduleConnection.id, scheduleConnection.provider, result)}
+      />
+    )}
   </div>;
 }

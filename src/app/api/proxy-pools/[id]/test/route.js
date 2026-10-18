@@ -52,7 +52,8 @@ export async function POST(request, { params }) {
     const result =
       proxyPool.type === "vercel" ||
       proxyPool.type === "cloudflare" ||
-      proxyPool.type === "deno"
+      proxyPool.type === "deno" ||
+      proxyPool.type === "netlify"
         ? await testVercelRelay(proxyPool.proxyUrl)
         : await testProxyUrl({ proxyUrl: proxyPool.proxyUrl });
     const now = new Date().toISOString();

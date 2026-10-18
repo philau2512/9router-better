@@ -29,6 +29,8 @@ export {
   refreshCodebuddyIntlToken,
   refreshTraeToken,
   refreshWindsurfToken,
+  refreshMiniMaxCodeToken,
+  refreshNousToken,
 } from "./tokenRefresh/providers.js";
 
 export { parseVertexSaJson, refreshVertexToken } from "./refresh-vertex.js";

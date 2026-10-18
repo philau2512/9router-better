@@ -27,6 +27,8 @@ export const USAGE_SUPPORTED_PROVIDERS = [
   "groq",
   "zed",
   "commandcode",
+  "minimax-code",
+  "minimax-code-global",
 ];
 
 // Subset that uses apikey auth (still surfaced on quota page).

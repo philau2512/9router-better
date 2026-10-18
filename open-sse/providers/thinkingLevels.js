@@ -31,12 +31,15 @@ const FORMAT_LEVELS = {
   minimax: L.onOff,
   hunyuan: L.base,
   step: L.base,
+  nous: L.base,
 };
 
 const CODEX_GPT_5_6_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // Model-name pattern overrides (glob, first match wins) — more precise than format default.
 const PATTERN_THINKING = [
+  // Gemini 4 (Argon) rejects "minimal" with 400 — LOW is the floor; cannot disable thinking.
+  { pattern: "*gemini-4*", levels: ["low", "medium", "high"] },
   { provider: "codex", pattern: "*gpt-6*", levels: CODEX_GPT_5_6_LEVELS },
   { provider: "codex", pattern: "*gpt-5.6-sol*", levels: [...CODEX_GPT_5_6_LEVELS, "ultra"] },
   { provider: "codex", pattern: "*gpt-5.6-terra*", levels: [...CODEX_GPT_5_6_LEVELS, "ultra"] },
@@ -60,6 +63,14 @@ const PATTERN_THINKING = [
   { provider: "codebuddy-cn", pattern: "hy4*",         levels: ["high"] },
   // codebuddy-intl rides the same gateway catalog, so its deepseek levels match.
   { provider: "codebuddy-intl", pattern: "deepseek-v4*", levels: ["low", "high", "xhigh"] },
+  // MiniMax Code (mcode) — adaptive effort via output_config.effort. M3.1
+  // always thinks (no none); M3 is switchable with none/high only, per the
+  // magpie static catalog. M2.7 pair falls through to the claude-adaptive
+  // set minus none (canDisable: false).
+  { provider: "minimax-code", pattern: "MiniMax-M3.1*", levels: ["low", "medium", "high", "xhigh", "max"] },
+  { provider: "minimax-code", pattern: "MiniMax-M3", levels: ["none", "high"] },
+  { provider: "minimax-code-global", pattern: "MiniMax-M3.1*", levels: ["low", "medium", "high", "xhigh", "max"] },
+  { provider: "minimax-code-global", pattern: "MiniMax-M3", levels: ["none", "high"] },
 ];
 
 // Returns valid thinking levels for a model, or null when the model has no reasoning.

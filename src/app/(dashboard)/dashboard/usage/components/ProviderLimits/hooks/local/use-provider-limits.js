@@ -44,6 +44,10 @@ export function useProviderLimits() {
     claude: {},
     codex: {},
   });
+  const [autoPingConfigs, setAutoPingConfigs] = useState({
+    claude: {},
+    codex: {},
+  });
   const [resetCreditsState, setResetCreditsState] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState(null);
@@ -378,6 +382,10 @@ export function useProviderLimits() {
       .then((res) => (res.ok ? res.json() : null))
       .then((settings) => {
         if (cancelled || !settings) return;
+        setAutoPingConfigs({
+          claude: settings.claudeAutoPing || {},
+          codex: settings.codexAutoPing || {},
+        });
         setAutoPingMaps({
           claude: settings.claudeAutoPing?.connections || {},
           codex: settings.codexAutoPing?.connections || {},
@@ -388,6 +396,54 @@ export function useProviderLimits() {
       cancelled = true;
     };
   }, []);
+
+  const handleSaveAutoPing = useCallback(
+    async (connectionId, provider, { reactive, schedule }) => {
+      const settingsKey =
+        provider === "claude" ? "claudeAutoPing" : "codexAutoPing";
+      const previous = autoPingConfigs;
+      const prevCfg = autoPingConfigs[provider] || {};
+      const nextProviderCfg = {
+        ...prevCfg,
+        connections: {
+          ...(prevCfg.connections || {}),
+          [connectionId]: reactive,
+        },
+        schedules: {
+          ...(prevCfg.schedules || {}),
+          [connectionId]: schedule,
+        },
+      };
+      const nextConfigs = { ...autoPingConfigs, [provider]: nextProviderCfg };
+      setAutoPingConfigs(nextConfigs);
+      setAutoPingMaps({
+        claude: nextConfigs.claude.connections || {},
+        codex: nextConfigs.codex.connections || {},
+      });
+
+      try {
+        const r = await fetch("/api/settings", { cache: "no-store" });
+        const s = r.ok ? await r.json() : {};
+        const fullCfg = {
+          ...(s[settingsKey] || {}),
+          connections: nextProviderCfg.connections,
+          schedules: nextProviderCfg.schedules,
+        };
+        await fetch("/api/settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [settingsKey]: fullCfg }),
+        });
+      } catch {
+        setAutoPingConfigs(previous);
+        setAutoPingMaps({
+          claude: previous.claude.connections || {},
+          codex: previous.codex.connections || {},
+        });
+      }
+    },
+    [autoPingConfigs],
+  );
 
   const toggleAutoPing = useCallback(async (connection) => {
     const provider = connection?.provider;
@@ -758,7 +814,9 @@ export function useProviderLimits() {
     resetConfirmState,
     setResetConfirmState,
     autoPingMaps,
+    autoPingConfigs,
     toggleAutoPing,
+    handleSaveAutoPing,
     resetCreditsState,
     setResetCreditsState,
     showEditModal,

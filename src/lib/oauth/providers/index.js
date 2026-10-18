@@ -26,6 +26,9 @@ import kimchi from "./kimchi.js";
 import trae from "./trae.js";
 import windsurf from "./windsurf.js";
 import zed from "./zed.js";
+import minimaxCode from "./minimax-code.js";
+import minimaxCodeGlobal from "./minimax-code-global.js";
+import nous from "./nous.js";
 
 // Provider configurations
 const PROVIDERS = {
@@ -51,6 +54,9 @@ const PROVIDERS = {
   trae,
   windsurf,
   zed,
+  "minimax-code": minimaxCode,
+  "minimax-code-global": minimaxCodeGlobal,
+  nous,
 };
 
 export { PROVIDERS };

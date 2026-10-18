@@ -26,6 +26,7 @@ export {
   getApiKeys,
   getApiKeyById,
   getApiKeyByValue,
+  getApiKeyByKey,
   createApiKey,
   updateApiKey,
   deleteApiKey,

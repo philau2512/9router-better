@@ -503,7 +503,7 @@ export async function handleChatCore({
     if (isHeadroomPhantomSavings(headroomStats, headroomDiagnostics)) {
       log?.warn?.(
         "HEADROOM",
-        `reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload | ${headroomSizeLine}`,
+        `reported token delta, but messages and outbound JSON shrank <5% | ${formatHeadroomSizeLog(headroomDiagnostics)}`,
       );
     }
   } else if (tokenSaverEnabled && headroomEnabled) {

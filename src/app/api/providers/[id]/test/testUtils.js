@@ -7,11 +7,21 @@ import { testProxyUrl } from "@/lib/network/proxyTest";
 import {
   isOpenAICompatibleProvider,
   isAnthropicCompatibleProvider,
+  AI_PROVIDERS,
 } from "@/shared/constants/providers";
 import { PROVIDER_ENDPOINTS, QUOTA_AUTOPING_CONFIG } from "@/shared/constants/config";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
+import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
-import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";import {
+import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
+import {
+  NOUS_CHAT_COMPLETIONS_URL,
+  NOUS_VALIDATION_MODEL,
+  createNousApiKeyProbe,
+  getNousApiKeyValidationError,
+  isNousApiKeyAccepted,
+} from "open-sse/services/nous.js";
+import {
   refreshProviderCredentials,
   shouldRefreshCredentials,
   shouldRefreshCredentialsForUsage,
@@ -160,6 +170,21 @@ const OAUTH_TEST_CONFIG = {
     acceptStatuses: [400],
     refreshable: true,
   },
+  nous: {
+    url: NOUS_CHAT_COMPLETIONS_URL,
+    method: "POST",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    extraHeaders: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: NOUS_VALIDATION_MODEL,
+      messages: [{ role: "user", content: "ping" }],
+      max_tokens: 1,
+      stream: false,
+    }),
+    refreshable: true,
+    useApiKey: true,
+  },
   "gemini-cli": {
     url: "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
     method: "GET",
@@ -259,7 +284,12 @@ async function refreshOAuthToken(connection) {
       };
     }
 
-    if (provider === "codex") {
+    if (
+      provider === "codex" ||
+      provider === "grok-cli" ||
+      provider === "xai" ||
+      provider === "nous"
+    ) {
       return await refreshProviderCredentials(provider, connection, console);
     }
 
@@ -417,7 +447,9 @@ async function testOAuthConnection(
     return { valid: true, error: null, refreshed: false, newTokens: null };
   }
 
-  let accessToken = connection.accessToken;
+  let accessToken = config.useApiKey
+    ? connection.apiKey || connection.accessToken
+    : connection.accessToken;
   let refreshed = false;
   let newTokens = null;
 
@@ -425,7 +457,9 @@ async function testOAuthConnection(
   if (config.refreshable && tokenExpired && connection.refreshToken) {
     const tokens = await refreshOAuthToken(connection);
     if (tokens) {
-      accessToken = tokens.accessToken;
+      accessToken = config.useApiKey
+        ? tokens.apiKey || tokens.accessToken
+        : tokens.accessToken;
       refreshed = true;
       newTokens = tokens;
     } else {
@@ -508,13 +542,16 @@ async function testOAuthConnection(
     ) {
       const tokens = await refreshOAuthToken(connection);
       if (tokens) {
+        const retryToken = config.useApiKey
+          ? tokens.apiKey || tokens.accessToken
+          : tokens.accessToken;
         const retryUrl = config.buildUrl
-          ? config.buildUrl(tokens.accessToken)
+          ? config.buildUrl(retryToken)
           : testUrl;
         const retryHeaders = config.noAuth
           ? { ...config.extraHeaders }
           : {
-              [config.authHeader]: `${config.authPrefix}${tokens.accessToken}`,
+              [config.authHeader]: `${config.authPrefix}${retryToken}`,
               ...config.extraHeaders,
             };
         const retryOpts = { method: config.method, headers: retryHeaders };
@@ -636,6 +673,20 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
     }
   }
 
+  // AWS-signed providers (Bedrock): without this every Test ends in the switch's default,
+  // "Provider test not supported", and marks a working connection as errored.
+  if (AI_PROVIDERS[connection.provider]?.credentialForm === "aws") {
+    try {
+      return await probeBedrockCredentials(
+        connection,
+        (url, options) =>
+          fetchWithConnectionProxy(url, options, effectiveProxy),
+      );
+    } catch (err) {
+      return { valid: false, error: err.message };
+    }
+  }
+
   try {
     switch (connection.provider) {
       case "cloudflare-ai": {
@@ -747,6 +798,24 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
           effectiveProxy,
         );
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
+      }
+      case "nous": {
+        // /models is public on Nous; a minimal chat request is required to
+        // distinguish an accepted Portal key from an arbitrary Bearer value.
+        const probe = createNousApiKeyProbe(connection.apiKey);
+        const res = await fetchWithConnectionProxy(
+          probe.url,
+          {
+            ...probe.options,
+            signal: AbortSignal.timeout(8000),
+          },
+          effectiveProxy,
+        );
+        const valid = isNousApiKeyAccepted(res.status);
+        return {
+          valid,
+          error: valid ? null : getNousApiKeyValidationError(res.status),
+        };
       }
       case "glm": {
         const res = await fetchWithConnectionProxy(
@@ -1272,6 +1341,7 @@ export async function testSingleConnection(id) {
       updateData.accessToken = result.newTokens.accessToken;
     if (result.newTokens.refreshToken)
       updateData.refreshToken = result.newTokens.refreshToken;
+    if (result.newTokens.apiKey) updateData.apiKey = result.newTokens.apiKey;
     if (result.newTokens.idToken) updateData.idToken = result.newTokens.idToken;
     if (result.newTokens.lastRefreshAt)
       updateData.lastRefreshAt = result.newTokens.lastRefreshAt;

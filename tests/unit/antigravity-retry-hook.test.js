@@ -107,10 +107,10 @@ describe("antigravity computeRetryDelay hook", () => {
       "https://daily-cloudcode-pa.googleapis.com",
     );
     expect(antigravity.transport.headers["User-Agent"]).toBe(
-      "antigravity/ide/2.11.0 darwin/arm64",
+      "antigravity/ide/2.22.0 darwin/arm64",
     );
     const headers = executor.buildHeaders({ accessToken: "tok" }, true);
-    expect(headers["User-Agent"]).toBe("antigravity/ide/2.11.0 darwin/arm64");
+    expect(headers["User-Agent"]).toBe("antigravity/ide/2.22.0 darwin/arm64");
     expect(headers).not.toHaveProperty("x-request-source");
   });
 

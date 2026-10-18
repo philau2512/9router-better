@@ -2,6 +2,14 @@ import { platform, arch, hostname } from "os";
 import { PROVIDERS } from "./providers.js";
 import { createRequire } from "module";
 
+// Nous Portal requires attribution for some API-key models. Use a neutral
+// router identity rather than exposing a credential or claiming another client.
+export const NOUS_ATTRIBUTION = {
+  hostname: "inference-api.nousresearch.com",
+  chatCompletionsPath: "/v1/chat/completions",
+  tags: ["product=9router", "client=9router", "user=9router"],
+};
+
 // === Gemini CLI ===
 export const GEMINI_CLI_VERSION = "0.34.0";
 export const GEMINI_CLI_API_CLIENT = "google-genai-sdk/1.41.0 gl-node/v22.19.0";

@@ -9,6 +9,7 @@ import {
 } from "../utils/endpointLimitHelpers";
 import { SecurityWarning } from "./SecurityWarning";
 import { StatusAlert } from "./StatusAlert";
+import KeyAccessControls from "./KeyAccessControls";
 
 export function ApiKeysCard({
   keys,
@@ -27,6 +28,8 @@ export function ApiKeysCard({
   onToggleKey,
   onDeleteKey,
   maskKey,
+  onUpdateKeyAccess,
+  onRequestRestrictKey,
 }) {
   return (
     <Card id="require-api-key">
@@ -169,6 +172,14 @@ export function ApiKeysCard({
                         </Link>
                       </div>
                     </div>
+
+                    {onUpdateKeyAccess && (
+                      <KeyAccessControls
+                        apiKey={key}
+                        onChange={(access) => onUpdateKeyAccess(key.id, access)}
+                        onRequestRestrict={() => onRequestRestrictKey(key)}
+                      />
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">

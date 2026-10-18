@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Build 9Router standalone Windows executable (e.g., 9router-v0.5.95.exe).
+ * Build 9Router standalone Windows executable (e.g., 9router-v0.5.104.exe).
  *
  * Packaging strategy:
  * 1. Verifies/builds Next.js standalone artifacts into `cli/app/` (via `cli/scripts/build-cli.js`).
@@ -11,7 +11,7 @@
  *
  * Usage:
  *   node scripts/build-windows-exe.mjs
- *   node scripts/build-windows-exe.mjs --version 0.5.95
+ *   node scripts/build-windows-exe.mjs --version 0.5.104
  *   node scripts/build-windows-exe.mjs --skip-build
  */
 
@@ -49,7 +49,7 @@ function parseArgs() {
 function getAppVersion() {
   const pkgPath = path.join(rootDir, "package.json");
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-  return pkg.version || "0.5.95";
+  return pkg.version || "0.5.104";
 }
 
 function findCscCompiler() {

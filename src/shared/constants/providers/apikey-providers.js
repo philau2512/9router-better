@@ -6,6 +6,58 @@
 import { THINKING_CONFIG, MINIMAX_TTS_MODELS } from "./thinking-config.js";
 
 export const APIKEY_PROVIDERS = {
+  bedrock: {
+    id: "bedrock",
+    alias: "br",
+    aliases: ["aws-bedrock"],
+    uiAlias: "br",
+    category: "apikey",
+    authType: "apikey",
+    apiKeyOptionalWith: "profile",
+    credentialForm: "aws",
+    name: "AWS Bedrock",
+    icon: "cloud",
+    color: "#FF9900",
+    textIcon: "BR",
+    website: "https://aws.amazon.com/bedrock/",
+    notice: {
+      text:
+        "Two ways to authenticate, both entered in the AWS Bedrock Credentials section below. " +
+        "SSO / profile (recommended): fill in Profile and Region, leave the API key empty, then " +
+        "run `aws sso login --profile <name>` — credentials refresh automatically. " +
+        "Static keys: put the AWS secret access key in the API Key field and the key id in " +
+        "Access Key ID, adding Session Token if they are temporary (ASIA…) keys. " +
+        "A profile, if set, takes precedence over static keys.",
+      apiKeyUrl: "https://console.aws.amazon.com/iam/home#/security_credentials",
+    },
+    passthroughModels: true,
+  },
+  "bedrock-xai": {
+    id: "bedrock-xai",
+    alias: "brx",
+    aliases: ["bedrock-grok"],
+    uiAlias: "brx",
+    category: "apikey",
+    authType: "apikey",
+    apiKeyOptionalWith: "profile",
+    credentialForm: "aws",
+    name: "AWS Bedrock (xAI)",
+    icon: "cloud",
+    color: "#FF9900",
+    textIcon: "BX",
+    website: "https://aws.amazon.com/bedrock/",
+    notice: {
+      text:
+        "xAI Grok models hosted on AWS Bedrock. Authenticate exactly like the AWS Bedrock " +
+        "provider: fill in Profile and Region and leave the API key empty, then run " +
+        "`aws sso login --profile <name>`; or use static keys with the AWS secret access key " +
+        "as the API key. Note Grok is a reasoning model and spends output budget thinking " +
+        'before it answers — a small max_tokens returns finish_reason "length" with empty ' +
+        "content, so allow a few thousand tokens.",
+      apiKeyUrl: "https://console.aws.amazon.com/iam/home#/security_credentials",
+    },
+    passthroughModels: true,
+  },
   glm: {
     id: "glm",
     alias: "glm",
@@ -626,7 +678,21 @@ export const APIKEY_PROVIDERS = {
     textIcon: "EL",
     website: "https://elevenlabs.io",
     notice: { apiKeyUrl: "https://elevenlabs.io/app/settings/api-keys" },
-    serviceKinds: ["tts"],
+    serviceKinds: ["tts", "stt"],
+    models: [
+      {
+        id: "scribe_v1",
+        name: "Scribe v1",
+        params: ["language", "response_format", "timestamps_granularity", "tag_audio_events", "diarize", "num_speakers"],
+        kind: "stt",
+      },
+      {
+        id: "scribe_v2",
+        name: "Scribe v2",
+        params: ["language", "response_format", "timestamps_granularity", "tag_audio_events", "diarize", "num_speakers"],
+        kind: "stt",
+      },
+    ],
     ttsConfig: {
       baseUrl: "https://api.elevenlabs.io/v1/text-to-speech",
       authType: "apikey",
@@ -636,6 +702,13 @@ export const APIKEY_PROVIDERS = {
         { id: "eleven_multilingual_v2", name: "Eleven Multilingual v2" },
         { id: "eleven_turbo_v2_5", name: "Eleven Turbo v2.5" },
       ],
+    },
+    sttConfig: {
+      baseUrl: "https://api.elevenlabs.io/v1/speech-to-text",
+      authType: "apikey",
+      authHeader: "xi-api-key",
+      format: "elevenlabs-stt",
+      responseFormats: { segments: "seg_json", subtitles: "srt", captions: "vtt" },
     },
   },
   cartesia: {
