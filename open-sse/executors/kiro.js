@@ -911,8 +911,9 @@ export class KiroExecutor extends BaseExecutor {
           return false;
         }
         if (state.buffer.byteLength < totalLength) break;
-        const frame = state.buffer.slice(0, totalLength);
-        state.buffer = state.buffer.slice(totalLength);
+        const frame = state.buffer.subarray(0, totalLength);
+        state.buffer = state.buffer.subarray(totalLength);
+        if (state.buffer.byteLength === 0) state.buffer = new Uint8Array(0);
         let event;
         try {
           event = parseEventFrame(frame);

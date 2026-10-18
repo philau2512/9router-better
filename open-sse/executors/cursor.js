@@ -462,13 +462,21 @@ export class CursorExecutor extends BaseExecutor {
     return generateCursorBody(messages, model, tools, reasoningEffort, forceAgentMode);
   }
 
-  async makeFetchRequest(url, headers, body, signal, proxyOptions = null) {
+  async makeFetchRequest(url, headers, body, signal, proxyOptions = null, stream = false) {
     const response = await proxyAwareFetch(url, {
       method: "POST",
       headers,
       body,
       signal
     }, proxyOptions);
+
+    if (stream && response.status === 200 && response.body) {
+      return {
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        stream: response.body
+      };
+    }
 
     return {
       status: response.status,
@@ -477,7 +485,7 @@ export class CursorExecutor extends BaseExecutor {
     };
   }
 
-  makeHttp2Request(url, headers, body, signal) {
+  makeHttp2Request(url, headers, body, signal, stream = false) {
     if (!http2) {
       throw new Error("http2 module not available");
     }
@@ -505,7 +513,9 @@ export class CursorExecutor extends BaseExecutor {
         reject(new Error("HTTP/2 request timed out"));
       }), HTTP2_TIMEOUT_MS);
 
-      client.on("error", finish(reject));
+      client.on("error", (err) => {
+        if (!settled) finish(reject)(err);
+      });
 
       const req = client.request({
         ":method": "POST",
@@ -515,21 +525,65 @@ export class CursorExecutor extends BaseExecutor {
         ...headers
       });
 
-      req.on("response", (hdrs) => { responseHeaders = hdrs; });
-      req.on("data", (chunk) => { chunks.push(chunk); });
-      req.on("end", finish(() => {
-        resolve({
-          status: responseHeaders[":status"],
-          headers: responseHeaders,
-          body: Buffer.concat(chunks)
-        });
-      }));
-      req.on("error", finish(reject));
+      req.on("error", (err) => {
+        if (!settled) finish(reject)(err);
+      });
 
       if (signal) {
-        const onAbort = finish(() => reject(new Error("Request aborted")));
+        const onAbort = () => {
+          try { req.destroy(); } catch {}
+          try { client.close(); } catch {}
+          if (!settled) finish(reject)(new Error("Request aborted"));
+        };
         signal.addEventListener("abort", onAbort, { once: true });
       }
+
+      req.on("response", (hdrs) => {
+        responseHeaders = hdrs;
+        const status = Number(hdrs[":status"]);
+        if (stream && status === 200) {
+          settled = true;
+          clearTimeout(hangTimeout);
+          const readable = new ReadableStream({
+            start(controller) {
+              req.on("data", (chunk) => controller.enqueue(chunk));
+              req.on("end", () => {
+                client.close();
+                controller.close();
+              });
+              req.on("error", (err) => {
+                client.close();
+                controller.error(err);
+              });
+            },
+            cancel() {
+              try { req.destroy(); } catch {}
+              try { client.close(); } catch {}
+            }
+          });
+          resolve({
+            status,
+            headers: responseHeaders,
+            stream: readable
+          });
+        }
+      });
+
+      req.on("data", (chunk) => {
+        if (!settled) chunks.push(chunk);
+      });
+
+      req.on("end", () => {
+        if (!settled) {
+          finish(() => {
+            resolve({
+              status: Number(responseHeaders[":status"] || 200),
+              headers: responseHeaders,
+              body: Buffer.concat(chunks)
+            });
+          })();
+        }
+      });
 
       req.write(body);
       req.end();
@@ -1031,13 +1085,23 @@ export class CursorExecutor extends BaseExecutor {
     const transformedBody = this.transformRequest(model, body, stream, credentials);
 
     try {
+      const isStreaming = stream !== false;
       const shouldForceFetch = proxyOptions?.enabled === true || proxyOptions?.connectionProxyEnabled === true || !!proxyOptions?.vercelRelayUrl;
       const response = (http2 && !shouldForceFetch)
-        ? await this.makeHttp2Request(url, headers, transformedBody, signal)
-        : await this.makeFetchRequest(url, headers, transformedBody, signal, proxyOptions);
+        ? await this.makeHttp2Request(url, headers, transformedBody, signal, isStreaming)
+        : await this.makeFetchRequest(url, headers, transformedBody, signal, proxyOptions, isStreaming);
 
       if (response.status !== 200) {
-        const errorText = response.body?.toString() || "Unknown error";
+        let errorText = "Unknown error";
+        if (response.body) {
+          errorText = response.body.toString();
+        } else if (response.stream) {
+          try {
+            const reader = response.stream.getReader();
+            const { value } = await reader.read();
+            if (value) errorText = Buffer.from(value).toString();
+          } catch {}
+        }
         const errorResponse = new Response(JSON.stringify({
           error: {
             message: `[${response.status}]: ${errorText}`,
@@ -1051,8 +1115,8 @@ export class CursorExecutor extends BaseExecutor {
         return { response: errorResponse, url, headers, transformedBody: body };
       }
 
-      const transformedResponse = stream !== false
-        ? this.transformProtobufToSSE(response.body, model, body)
+      const transformedResponse = isStreaming
+        ? (response.stream ? this.transformProtobufStreamToSSE(response.stream, model, body) : this.transformProtobufToSSE(response.body, model, body))
         : this.transformProtobufToJSON(response.body, model, body);
 
       return { response: transformedResponse, url, headers, transformedBody: body };
@@ -1221,6 +1285,188 @@ export class CursorExecutor extends BaseExecutor {
     return new Response(JSON.stringify(completion), {
       status: 200,
       headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  transformProtobufStreamToSSE(byteStream, model, body) {
+    if (Buffer.isBuffer(byteStream) || byteStream instanceof Uint8Array) {
+      return this.transformProtobufToSSE(byteStream, model, body);
+    }
+    const responseId = `chatcmpl-cursor-${Date.now()}`;
+    const created = Math.floor(Date.now() / 1000);
+    const enc = new TextEncoder();
+
+    let pending = Buffer.alloc(0);
+    let totalContent = "";
+    let totalThinking = "";
+    let emittedComposerThinkingContentLength = 0;
+    const toolCalls = [];
+    const toolCallsMap = new Map();
+    const finalizedIds = new Set();
+    const emittedToolCallIds = new Set();
+    let frameCount = 0;
+    let emittedFirstChunk = false;
+
+    const sseStream = new ReadableStream({
+      async start(controller) {
+        const reader = byteStream.getReader();
+
+        const emitSse = (dataStr) => {
+          controller.enqueue(enc.encode(dataStr));
+        };
+
+        const processFrame = (payload) => {
+          if (payload.length > 0 && payload[0] === 0x7b) {
+            try {
+              const text = payload.toString("utf-8");
+              if (text.includes('"error"')) return false;
+            } catch {}
+          }
+          const result = extractTextFromResponse(new Uint8Array(payload));
+          if (result.error) return false;
+
+          if (result.toolCall) {
+            const tc = result.toolCall;
+            if (!emittedFirstChunk) {
+              emittedFirstChunk = true;
+              emitSse(chatChunkSse({ id: responseId, created, model, delta: { role: "assistant", content: "" } }));
+            }
+            if (toolCallsMap.has(tc.id)) {
+              const existing = toolCallsMap.get(tc.id);
+              existing.function.arguments += tc.function.arguments;
+              existing.isLast = tc.isLast;
+              if (tc.function.arguments) {
+                emittedToolCallIds.add(tc.id);
+                emitSse(chatChunkSse({
+                  id: responseId, created, model,
+                  delta: {
+                    tool_calls: [{
+                      index: existing.index,
+                      id: tc.id,
+                      type: "function",
+                      function: { name: tc.function.name, arguments: tc.function.arguments }
+                    }]
+                  }
+                }));
+              }
+            } else {
+              const toolCallIndex = toolCalls.length;
+              finalizedIds.add(tc.id);
+              toolCalls.push({ ...tc, index: toolCallIndex });
+              toolCallsMap.set(tc.id, { ...tc, index: toolCallIndex });
+              emittedToolCallIds.add(tc.id);
+              emitSse(chatChunkSse({
+                id: responseId, created, model,
+                delta: {
+                  tool_calls: [{
+                    index: toolCallIndex,
+                    id: tc.id,
+                    type: "function",
+                    function: { name: tc.function.name, arguments: tc.function.arguments }
+                  }]
+                }
+              }));
+            }
+          }
+
+          if (result.text) {
+            totalContent += result.text;
+            const delta = !emittedFirstChunk && toolCalls.length === 0
+              ? { role: "assistant", content: result.text }
+              : { content: result.text };
+            emittedFirstChunk = true;
+            emitSse(chatChunkSse({ id: responseId, created, model, delta }));
+          }
+
+          if (isComposerModel(model) && result.thinking) {
+            totalThinking += result.thinking;
+            const visibleContent = visibleComposerContentFromThinking(totalThinking);
+            if (visibleContent.length > emittedComposerThinkingContentLength) {
+              const deltaContent = visibleContent.slice(emittedComposerThinkingContentLength);
+              emittedComposerThinkingContentLength = visibleContent.length;
+              totalContent += deltaContent;
+              const delta = !emittedFirstChunk && toolCalls.length === 0
+                ? { role: "assistant", content: deltaContent }
+                : { content: deltaContent };
+              emittedFirstChunk = true;
+              emitSse(chatChunkSse({ id: responseId, created, model, delta }));
+            }
+          }
+          return true;
+        };
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            pending = Buffer.concat([pending, Buffer.from(value)]);
+
+            while (pending.length >= 5) {
+              const flags = pending[0];
+              const length = pending.readUInt32BE(1);
+              if (pending.length < 5 + length) {
+                break;
+              }
+              const rawPayload = pending.subarray(5, 5 + length);
+              pending = pending.subarray(5 + length);
+              frameCount++;
+              const payload = decompressPayload(rawPayload, flags);
+              if (payload) {
+                processFrame(payload);
+              }
+            }
+          }
+
+          for (const [id, tc] of toolCallsMap.entries()) {
+            if (!finalizedIds.has(id)) {
+              const toolCallIndex = toolCalls.length;
+              toolCalls.push({ id: tc.id, type: tc.type, index: toolCallIndex, function: tc.function });
+              if (!emittedToolCallIds.has(tc.id)) {
+                emitSse(chatChunkSse({
+                  id: responseId, created, model,
+                  delta: {
+                    tool_calls: [{
+                      index: toolCallIndex,
+                      id: tc.id,
+                      type: "function",
+                      function: tc.function
+                    }]
+                  }
+                }));
+              }
+            }
+          }
+
+          if (!emittedFirstChunk && toolCalls.length === 0) {
+            emitSse(chatChunkSse({ id: responseId, created, model, delta: { role: "assistant", content: "" } }));
+          }
+
+          const usage = estimateUsage(body, totalContent.length, FORMATS.OPENAI);
+          emitSse(`data: ${JSON.stringify({
+            id: responseId,
+            object: "chat.completion.chunk",
+            created,
+            model,
+            choices: [{
+              index: 0,
+              delta: {},
+              finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop"
+            }],
+            usage
+          })}\n\n`);
+          emitSse(SSE_DONE);
+        } catch (err) {
+          controller.error(err);
+          return;
+        } finally {
+          controller.close();
+        }
+      }
+    });
+
+    return new Response(sseStream, {
+      status: 200,
+      headers: { ...SSE_HEADERS }
     });
   }
 

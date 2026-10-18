@@ -261,18 +261,20 @@ export function openaiToClaudeResponse(chunk, state) {
               (state.toolArgBuffers.get(idx) || "") + tc.function.arguments;
             state.toolArgBuffers.set(idx, current);
 
-            // Try to parse early if the arguments are complete (e.g. in tests)
-            try {
-              JSON.parse(current);
-              const sanitized = sanitizeToolArgs(toolInfo.name, current);
-              results.push({
-                type: "content_block_delta",
-                index: toolInfo.blockIndex,
-                delta: { type: "input_json_delta", partial_json: sanitized },
-              });
-              state.toolArgBuffers.delete(idx);
-            } catch {
-              // JSON is incomplete, continue buffering
+            // Try to parse early only if the arguments look like closed JSON (avoids throwing on every chunk)
+            if (current.trimEnd().endsWith("}")) {
+              try {
+                JSON.parse(current);
+                const sanitized = sanitizeToolArgs(toolInfo.name, current);
+                results.push({
+                  type: "content_block_delta",
+                  index: toolInfo.blockIndex,
+                  delta: { type: "input_json_delta", partial_json: sanitized },
+                });
+                state.toolArgBuffers.delete(idx);
+              } catch {
+                // JSON is incomplete, continue buffering
+              }
             }
           } else {
             // Stream arguments directly in real-time

@@ -205,7 +205,8 @@ function startReasoning(state, emit, idx) {
 
 function emitReasoningDelta(state, emit, text) {
   if (!text) return;
-  state.reasoningBuf += text;
+  if (!state.reasoningParts) state.reasoningParts = [];
+  state.reasoningParts.push(text);
   emit("response.reasoning_summary_text.delta", {
     type: "response.reasoning_summary_text.delta",
     item_id: state.reasoningId,
@@ -218,13 +219,15 @@ function emitReasoningDelta(state, emit, text) {
 function closeReasoning(state, emit) {
   if (state.reasoningId && !state.reasoningDone) {
     state.reasoningDone = true;
+    const fullText = (state.reasoningParts ? state.reasoningParts.join("") : "") || state.reasoningBuf || "";
+    state.reasoningBuf = fullText;
 
     emit("response.reasoning_summary_text.done", {
       type: "response.reasoning_summary_text.done",
       item_id: state.reasoningId,
       output_index: state.reasoningIndex,
       summary_index: 0,
-      text: state.reasoningBuf,
+      text: fullText,
     });
 
     emit("response.reasoning_summary_part.done", {
@@ -232,13 +235,13 @@ function closeReasoning(state, emit) {
       item_id: state.reasoningId,
       output_index: state.reasoningIndex,
       summary_index: 0,
-      part: { type: "summary_text", text: state.reasoningBuf },
+      part: { type: "summary_text", text: fullText },
     });
 
     const item = {
       id: state.reasoningId,
       type: "reasoning",
-      summary: [{ type: "summary_text", text: state.reasoningBuf }],
+      summary: [{ type: "summary_text", text: fullText }],
     };
 
     emit("response.output_item.done", {
@@ -285,14 +288,16 @@ function emitTextContent(state, emit, idx, content) {
     logprobs: [],
   });
 
-  if (!state.msgTextBuf[idx]) state.msgTextBuf[idx] = "";
-  state.msgTextBuf[idx] += content;
+  if (!state.msgTextParts) state.msgTextParts = [];
+  if (!state.msgTextParts[idx]) state.msgTextParts[idx] = [];
+  state.msgTextParts[idx].push(content);
 }
 
 function closeMessage(state, emit, idx) {
   if (state.msgItemAdded[idx] && !state.msgItemDone[idx]) {
     state.msgItemDone[idx] = true;
-    const fullText = state.msgTextBuf[idx] || "";
+    const fullText = (state.msgTextParts?.[idx] ? state.msgTextParts[idx].join("") : "") || state.msgTextBuf[idx] || "";
+    state.msgTextBuf[idx] = fullText;
     const outputIndex = getOutputIndex(state, "message", idx);
     const msgId = `msg_${state.responseId}_${outputIndex}`;
 
@@ -400,6 +405,9 @@ function emitToolCall(state, emit, tc) {
         ? { type: "response.custom_tool_call_input.delta", item_id: `fc_${callId}`, output_index: getOutputIndex(state, "tool", tcIdx), delta: input }
         : { type: "response.function_call_arguments.delta", item_id: `fc_${callId}`, output_index: getOutputIndex(state, "tool", tcIdx), delta: raw });
     }
+    if (!state.funcArgsParts) state.funcArgsParts = [];
+    if (!state.funcArgsParts[tcIdx]) state.funcArgsParts[tcIdx] = [];
+    state.funcArgsParts[tcIdx].push(input);
     state.funcArgsBuf[tcIdx] += input;
   }
 }
@@ -416,7 +424,8 @@ function parseCustomToolInput(argumentsText) {
 function closeToolCall(state, emit, idx) {
   const callId = state.funcCallIds[idx];
   if (callId && !state.funcItemDone[idx]) {
-    const args = state.funcArgsBuf[idx] || "{}";
+    const args = (state.funcArgsParts?.[idx] ? state.funcArgsParts[idx].join("") : "") || state.funcArgsBuf[idx] || "{}";
+    state.funcArgsBuf[idx] = args;
 
     const outputIndex = getOutputIndex(state, "tool", idx);
     const isCustom = state.customToolNames?.has(state.funcNames[idx]);

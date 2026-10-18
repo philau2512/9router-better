@@ -264,8 +264,9 @@ export class BedrockExecutor extends BaseExecutor {
             // Frame not fully arrived yet; wait for more bytes.
             if (buffer.byteLength < totalLength) break;
 
-            const frame = buffer.slice(0, totalLength);
-            buffer = buffer.slice(totalLength);
+            const frame = buffer.subarray(0, totalLength);
+            buffer = buffer.subarray(totalLength);
+            if (buffer.byteLength === 0) buffer = new Uint8Array(0);
 
             let event;
             try {

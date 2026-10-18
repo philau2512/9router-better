@@ -189,9 +189,6 @@ export function translateResponse(targetFormat, sourceFormat, chunk, state) {
     return chunk == null ? [] : [decloakStreamChunk(chunk, state?.toolNameMap)];
   }
 
-  let results = [chunk];
-  let openaiResults = null; // Store OpenAI intermediate results
-
   // Direct route: if a response translator is registered for this exact
   // target:source pair, use it instead of pivoting through OpenAI. Mirrors the
   // request-side direct route (e.g. kiro:claude — KiroExecutor already emits
@@ -201,6 +198,37 @@ export function translateResponse(targetFormat, sourceFormat, chunk, state) {
     const converted = directFn(chunk, state);
     return converted ? (Array.isArray(converted) ? converted : [converted]) : [];
   }
+
+  // Two-hop pivot fast path: targetFormat -> OPENAI -> sourceFormat
+  // Avoids array wrapping and spread overhead for the dominant single-delta stream case
+  if (targetFormat !== FORMATS.OPENAI && sourceFormat !== FORMATS.OPENAI) {
+    const toOpenAI = responseRegistry.get(`${targetFormat}:${FORMATS.OPENAI}`);
+    const fromOpenAI = responseRegistry.get(`${FORMATS.OPENAI}:${sourceFormat}`);
+    if (toOpenAI && fromOpenAI) {
+      const mid = toOpenAI(chunk, state);
+      if (!mid) return [];
+      if (!Array.isArray(mid)) {
+        const out = fromOpenAI(mid, state);
+        if (!out) return [];
+        return Array.isArray(out) ? out : [out];
+      }
+      const finalResults = [];
+      for (let i = 0; i < mid.length; i++) {
+        const out = fromOpenAI(mid[i], state);
+        if (out) {
+          if (Array.isArray(out)) {
+            for (let j = 0; j < out.length; j++) finalResults.push(out[j]);
+          } else {
+            finalResults.push(out);
+          }
+        }
+      }
+      return finalResults;
+    }
+  }
+
+  let results = [chunk];
+  let openaiResults = null; // Store OpenAI intermediate results
 
   // Step 1: target -> openai (if target is not openai)
   if (targetFormat !== FORMATS.OPENAI) {
@@ -223,7 +251,11 @@ export function translateResponse(targetFormat, sourceFormat, chunk, state) {
       for (const r of results) {
         const converted = fromOpenAI(r, state);
         if (converted) {
-          finalResults.push(...(Array.isArray(converted) ? converted : [converted]));
+          if (Array.isArray(converted)) {
+            for (let j = 0; j < converted.length; j++) finalResults.push(converted[j]);
+          } else {
+            finalResults.push(converted);
+          }
         }
       }
       results = finalResults;
