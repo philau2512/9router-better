@@ -214,6 +214,8 @@ export async function handleStreamingResponse({
       durationMs: Date.now() - requestStartTime,
       status: "error",
       error: new Error(message || "Stream aborted"),
+      timing,
+      endReason: message || "stream_aborted",
     });
     return isResponsesPassthrough
       ? buildAbortedResponsesTerminalBytes(message)
@@ -376,9 +378,15 @@ export function buildOnStreamComplete({
       ttft: latency.ttft,
       status: "success",
       usage,
+      timing,
     });
 
     if (timing) {
+      reqLogger?.recordTelemetry?.({
+        phase: "stream_complete",
+        elapsedMs: total,
+        endReason: "eof",
+      });
       log.ttft(`${provider.toUpperCase()} | ${log.hlModel(model)}`, {
         total,
         ttft: latency.ttft,

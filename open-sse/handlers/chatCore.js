@@ -322,6 +322,7 @@ export async function handleChatCore({
       clientRawRequest.headers,
     );
   reqLogger.logRawRequest(body);
+  reqLogger.recordTelemetry?.({ phase: "request_ready", elapsedMs: Date.now() - requestStartTime });
   log?.debug?.(
     "FORMAT",
     `${sourceFormat} → ${targetFormat} | stream=${stream}`,
@@ -420,6 +421,8 @@ export async function handleChatCore({
         durationMs: Date.now() - requestStartTime,
         status: "error",
         error: new Error(errMsg),
+        timing,
+        endReason: "translation_error",
       });
       return createErrorResult(
         HTTP_STATUS.BAD_REQUEST,
@@ -689,11 +692,13 @@ export async function handleChatCore({
       emitObjects: wantKiroObjects,
       onProfileArnDiscovered,
       timing,
+      requestLogger: reqLogger,
     });
   try {
     if (timing && !timing.upstreamFetchStartedAt) {
       timing.upstreamFetchStartedAt = Date.now();
     }
+    reqLogger.recordTelemetry?.({ phase: "executor_start", elapsedMs: Date.now() - requestStartTime });
     const result = await runExecutor();
     providerResponse = result.response;
     providerUrl = result.url;
@@ -741,6 +746,8 @@ export async function handleChatCore({
       durationMs: Date.now() - requestStartTime,
       status: "error",
       error,
+      timing,
+      endReason: error.name === "AbortError" ? "abort" : error.name,
     });
     if (error.name === "AbortError") {
       streamController.handleError(error);

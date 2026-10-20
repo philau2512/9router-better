@@ -63,6 +63,7 @@ describe("slow request logger auto-trap", () => {
     logger.logRawRequest({ prompt: "complex code task" });
     logger.logOpenAIRequest({ messages: [{ role: "user", content: "complex code task" }] });
     logger.logTargetRequest("https://antigravity.api", {}, { contents: [{ role: "user", parts: [{ text: "complex code task" }] }] });
+    logger.recordTelemetry({ phase: "headers_received", attempt: 1, httpStatus: 200, elapsedMs: 1200, authorization: "secret-token" });
     logger.appendProviderChunk("data: chunk1\n\n");
     logger.appendProviderChunk("data: chunk2\n\n");
 
@@ -95,6 +96,8 @@ describe("slow request logger auto-trap", () => {
     expect(meta.durationMs).toBe(220820);
     expect(meta.seconds).toBe(221);
     expect(meta.ttft).toBe(220230);
+    expect(meta.telemetry[0]).toMatchObject({ phase: "headers_received", attempt: 1, httpStatus: 200, elapsedMs: 1200 });
+    expect(JSON.stringify(meta)).not.toContain("secret-token");
   });
 
   it("automatically writes error request logs with ERROR status tag and 6_error.json", async () => {
