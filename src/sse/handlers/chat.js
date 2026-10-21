@@ -358,7 +358,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     if (result.success) return result.response;
 
-    // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;
     let resetsAtMs = result.resetsAtMs;
     if (provider === "antigravity" && (result.status === 409 || result.status === 429)) {
@@ -367,6 +366,17 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         refreshedCredentials.accessToken, credentials.providerSpecificData
       );
       if (quotaResetMs) resetsAtMs = quotaResetMs;
+    }
+
+    if (provider === "antigravity" && result.status === 429) {
+      if (quotaResetMs) {
+        log.warn("FALLBACK", `⇄ ACC:${credentials.connectionName} QUOTA EXHAUSTED (${result.status}) → NEXT ACCOUNT`);
+        excludeConnectionIds.add(credentials.connectionId);
+        lastError = result.error;
+        lastStatus = result.status;
+        continue;
+      }
+      return result.response;
     }
 
     const shouldFallback = (await markAccountUnavailable(
