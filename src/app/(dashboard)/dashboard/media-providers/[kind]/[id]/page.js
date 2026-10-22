@@ -11,6 +11,7 @@ import {
 } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import ConnectionsCard from "@/app/(dashboard)/dashboard/providers/components/ConnectionsCard";
+import { WEB_LOGIN_PROVIDERS } from "@/app/(dashboard)/dashboard/providers/components/WebLoginButton";
 import ModelsCard from "@/app/(dashboard)/dashboard/providers/components/ModelsCard";
 
 // Import custom hook
@@ -187,6 +188,7 @@ export default function MediaProviderDetailPage() {
           matchProviders={
             id === "xai" ? ["xai", "grok-cli"] : undefined
           }
+          loginProviderId={!isCustom && WEB_LOGIN_PROVIDERS.has(id) ? id : null}
         />
       )}
 

@@ -3,8 +3,14 @@
 import { nowSec, sizeToAspectRatio } from "./_base.js";
 import { getExecutor } from "../../executors/index.js";
 
+// Antigravity accepts up to 10 reference images per request
+const MAX_REFERENCE_IMAGES = 10;
+
 // Convert image input (data URI or raw base64) to Gemini inlineData part
 function resolveImageInput(input) {
+  if (input && typeof input === "object") {
+    input = input.image_url?.url || input.url || input.data || input.b64_json;
+  }
   if (!input || typeof input !== "string") return null;
   // data:image/png;base64,... format
   const dataUriMatch = input.match(/^data:(image\/[^;]+);base64,(.+)$/);
@@ -12,17 +18,26 @@ function resolveImageInput(input) {
     return { inlineData: { mimeType: dataUriMatch[1], data: dataUriMatch[2] } };
   }
   // Raw base64 string (assume PNG)
-  if (
-    /^[A-Za-z0-9+/]/.test(input) &&
-    input.length > 100 &&
-    !input.startsWith("http")
-  ) {
+  if (/^[A-Za-z0-9+/]/.test(input) && input.length > 100 && !input.startsWith("http")) {
     return { inlineData: { mimeType: "image/png", data: input } };
   }
   return null;
 }
 
-const antigravityAdapter = {
+// Collect reference images from the accepted request field shapes
+function collectImageInputs(body) {
+  const candidates = [
+    body.reference_images,
+    body.images,
+    body.reference_image,
+    body.image,
+  ];
+  return candidates
+    .flatMap(v => (Array.isArray(v) ? v : v ? [v] : []))
+    .slice(0, MAX_REFERENCE_IMAGES);
+}
+
+export default {
   // Delegate to executor instead of building URL/headers/body manually
   useExecutor: true,
 
@@ -39,37 +54,40 @@ const antigravityAdapter = {
     const isImageModel = (m) => /image|imagen|image-generation/i.test(m || "");
     let targetModel = isImageModel(model) ? model : "gemini-3.1-flash-image";
 
-    // If body.size is provided, resolve aspect ratio and append to model
-    if (body.size && typeof body.size === "string") {
-      const ratio = sizeToAspectRatio(body.size);
+    // Aspect ratio: explicit body.aspect_ratio wins, then body.size
+    let ratio = null;
+    if (body.aspect_ratio && /^\d{1,2}:\d{1,2}$/.test(String(body.aspect_ratio))) {
+      ratio = String(body.aspect_ratio);
+    } else if (body.size && typeof body.size === "string") {
+      ratio = sizeToAspectRatio(body.size);
+    }
+    if (ratio) {
       const suffix = ratio.replace(":", "x");
       if (!targetModel.includes(suffix)) {
         targetModel = `${targetModel}-${suffix}`;
       }
     }
 
-    // Build parts: text prompt + optional input image for editing
-    const parts = [{ text: body.prompt }];
-    const imageInput =
-      body.image || (Array.isArray(body.images) && body.images[0]);
-    if (imageInput) {
+    // Gemini image models have no negative prompt param — fold it into the prompt text
+    const prompt = body.negative_prompt
+      ? `${body.prompt}\n\nNegative prompt: ${body.negative_prompt}`
+      : body.prompt;
+
+    // Build parts: reference images first, then the text prompt
+    const parts = [];
+    for (const imageInput of collectImageInputs(body)) {
       const inlineData = resolveImageInput(imageInput);
-      if (inlineData) parts.unshift(inlineData);
+      if (inlineData) parts.push(inlineData);
     }
+    parts.push({ text: prompt });
+
+    const chatBody = {
+      contents: [{ role: "user", parts }],
+    };
 
     const result = await executor.execute({
       model: targetModel,
-      body: {
-        contents: [{ role: "user", parts }],
-        generationConfig: {
-          numberOfImages: body.n || 1,
-          outputMimeType:
-            (body.output_format || "png").toLowerCase() === "jpeg"
-              ? "image/jpeg"
-              : "image/png",
-          aspectRatio: sizeToAspectRatio(body.size || "1024x1024"),
-        },
-      },
+      body: chatBody,
       stream: false,
       credentials,
       log,
@@ -84,20 +102,14 @@ const antigravityAdapter = {
   },
 
   normalize: (responseBody, prompt) => {
-    const candidates =
-      responseBody.candidates || responseBody.response?.candidates || [];
+    const candidates = responseBody.candidates || responseBody.response?.candidates || [];
     const parts = candidates[0]?.content?.parts || [];
-    const images = parts
-      .filter((p) => p.inlineData?.data)
-      .map((p) => ({
-        b64_json: p.inlineData.data,
-      }));
+    const images = parts.filter((p) => p.inlineData?.data).map((p) => ({
+      b64_json: p.inlineData.data,
+    }));
     return {
       created: nowSec(),
-      data:
-        images.length > 0 ? images : [{ b64_json: "", revised_prompt: prompt }],
+      data: images.length > 0 ? images : [{ b64_json: "", revised_prompt: prompt }],
     };
   },
 };
-
-export default antigravityAdapter;

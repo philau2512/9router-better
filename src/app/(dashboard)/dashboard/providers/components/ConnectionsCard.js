@@ -13,6 +13,7 @@ import {
   ConfirmModal,
 } from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
+import WebLoginButton from "./WebLoginButton";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -539,11 +540,11 @@ AddApiKeyModal.propTypes = {
 
 // ── ConnectionsCard ────────────────────────────────────────────
 // Self-contained card: fetches, displays and manages all connections for a provider.
-// matchProviders: optional extra provider ids (e.g. xai page also shows grok-cli OAuth).
 export default function ConnectionsCard({
   providerId,
   isOAuth,
   matchProviders = null,
+  loginProviderId = null,
 }) {
   const [connections, setConnections] = useState([]);
   const [proxyPools, setProxyPools] = useState([]);
@@ -865,9 +866,14 @@ export default function ConnectionsCard({
         {connections.length === 0 ? (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-text-muted">No connections yet</p>
-            <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>
-              Add Connection
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {loginProviderId && (
+                <WebLoginButton providerId={loginProviderId} onConnected={fetch_} />
+              )}
+              <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>
+                Add Connection
+              </Button>
+            </div>
           </div>
         ) : (
           <>
@@ -898,7 +904,7 @@ export default function ConnectionsCard({
                 />
               ))}
             </div>
-            <div className="mt-4 flex justify-stretch sm:justify-start">
+            <div className="mt-4 flex justify-stretch gap-2 sm:justify-start">
               <Button
                 size="sm"
                 icon="add"
@@ -906,6 +912,10 @@ export default function ConnectionsCard({
               >
                 Add
               </Button>
+              {loginProviderId && (
+                <WebLoginButton providerId={loginProviderId} onConnected={fetch_} />
+              )}
+            </div>
             </div>
           </>
         )}
@@ -943,4 +953,5 @@ ConnectionsCard.propTypes = {
   providerId: PropTypes.string.isRequired,
   isOAuth: PropTypes.bool,
   matchProviders: PropTypes.arrayOf(PropTypes.string),
+  loginProviderId: PropTypes.string,
 };

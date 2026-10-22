@@ -96,11 +96,11 @@ export const KIND_EXAMPLE_CONFIG = {
       },
       {
         key: "image",
-        label: "Image URL (i2v)",
-        type: "text",
+        label: "Image (URL or upload)",
+        type: "image",
         default: "",
         placeholder: "optional start frame",
-        hint: "Image-to-video start frame. Required for grok-imagine-video-1.5 (text-to-video unsupported). Do not combine with reference_images.",
+        hint: "Image-to-video start frame. URL or uploaded file.",
       },
       {
         key: "video",

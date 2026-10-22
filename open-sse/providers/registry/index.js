@@ -133,6 +133,12 @@ import p_bedrock_xai from "./bedrock-xai.js";
 import p_minimax_code from "./minimax-code.js";
 import p_minimax_code_global from "./minimax-code-global.js";
 import p_nous from "./nous.js";
+import p140 from "./deepseek-web.js";
+import p143 from "./gemini-web.js";
+import p144 from "./muse-web.js";
+import p146 from "./chatgpt-web.js";
+import p147 from "./veoaifree-web.js";
+import p151 from "./uc-web.js";
 export default [
   p_agnes,
   p_atria,
@@ -266,4 +272,10 @@ export default [
   p_minimax_code,
   p_minimax_code_global,
   p_nous,
+  p140,
+  p143,
+  p144,
+  p146,
+  p147,
+  p151,
 ];
