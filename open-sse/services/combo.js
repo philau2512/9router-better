@@ -5,6 +5,7 @@
 import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
 import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
+import { parseModel } from "./model.js";
 import { extractTextContent } from "../translator/helpers/geminiHelper.js";
 import { hlModel } from "../../src/sse/utils/logger.js";
 
@@ -368,9 +369,12 @@ export async function handleComboChat({
       }
 
       // Check if should fallback to next model
+      const { provider } = parseModel(modelStr);
       const { shouldFallback, cooldownMs } = checkFallbackError(
         result.status,
         errorText,
+        0,
+        provider,
       );
 
       if (!shouldFallback) {
