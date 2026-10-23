@@ -183,7 +183,7 @@ export default function MediaProviderDetailPage() {
       {/* Connections — xai also lists grok-cli OAuth (same as /providers/xai) */}
       {!isCustom && provider.noAuth ? (
         <NoAuthProxyCard providerId={id} />
-      ) : OAUTH_PROVIDERS[id] ? (
+      ) : kind === "stt" && OAUTH_PROVIDERS[id] ? (
         <Card>
           <p className="text-sm text-text-muted mb-3">This service shares your existing OAuth connections.</p>
           <Link href={`/dashboard/providers/${id}`} className="text-primary hover:underline">Manage OAuth connections →</Link>
