@@ -396,7 +396,6 @@ export async function handleComboChat({
         if (!lastStatus) lastStatus = 502;
         continue;
       }
-      }
 
       // Extract error info from response
       let errorText = result.statusText || "";
