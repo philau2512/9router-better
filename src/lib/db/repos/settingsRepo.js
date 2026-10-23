@@ -71,6 +71,17 @@ const DEFAULT_SETTINGS = {
   // Deep request/response file logs under logs/ (was ENABLE_REQUEST_LOGS only)
   enableRequestLogs: process.env.ENABLE_REQUEST_LOGS === "true",
   backgroundTokenRefreshEnabled: true,
+  ponytailEnabled: false,
+  ponytailLevel: "full",
+  // User-authored system prompt, injected independently of the built-in savers.
+  customPromptEnabled: false,
+  customPrompt: "",
+  pxpipeEnabled: false,
+  pxpipeAutoInstall: true,
+  pxpipeMinChars: 25000,
+  pxpipeTimeoutMs: 15000,
+  // Per-provider user header overrides applied at dispatch: { [providerId]: { headers: {..} } }
+  providerOverrides: {},
 };
 
 async function readRaw() {

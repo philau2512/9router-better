@@ -45,6 +45,7 @@ import {
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
+import { injectCustomPrompt } from "../rtk/customPrompt.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import {
   compressWithHeadroom,
@@ -182,6 +183,9 @@ export async function handleChatCore({
   cavemanLevel,
   ponytailEnabled,
   ponytailLevel,
+  customPromptEnabled,
+  customPrompt,
+  providerOverrides,
   midStreamResumeEnabled,
   sourceFormatOverride,
   providerThinking,
@@ -578,6 +582,10 @@ export async function handleChatCore({
     log?.debug?.("PONYTAIL", `${ponytailLevel} | ${finalFormat}`);
   }
 
+  // Custom prompt: user-authored instruction, independent of the savers above
+  if (customPromptEnabled && injectCustomPrompt(translatedBody, finalFormat, customPrompt)) {
+    log?.debug?.("CUSTOMPROMPT", `${customPrompt.trim().length} chars | ${finalFormat}`);
+  }
   const executor = getExecutor(provider);
   stripContinuityFields(translatedBody);
   trackPendingRequest(model, provider, connectionId, true);

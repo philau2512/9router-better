@@ -65,6 +65,18 @@ export function useTokenSaverSettings(patchSetting, callbacks = {}) {
     patchSetting({ ponytailLevel: level });
   }, [patchSetting]);
 
+  const [customPromptEnabled, setCustomPromptEnabled] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
+
+  const handleCustomPromptEnabled = useCallback((value) => {
+    setCustomPromptEnabled(value);
+    patchSetting({ customPromptEnabled: value });
+  }, [patchSetting]);
+
+  const handleCustomPromptBlur = useCallback(() => {
+    patchSetting({ customPrompt });
+  }, [customPrompt, patchSetting]);
+
   useEffect(() => {
     const loadSettings = async () => {
       try {
@@ -76,6 +88,8 @@ export function useTokenSaverSettings(patchSetting, callbacks = {}) {
           setCavemanLevel(data.cavemanLevel || "full");
           setPonytailEnabled(!!data.ponytailEnabled);
           setPonytailLevel(data.ponytailLevel || "full");
+          setCustomPromptEnabled(!!data.customPromptEnabled);
+          setCustomPrompt(data.customPrompt || "");
 
           if (callbacks.setHeadroomEnabled) callbacks.setHeadroomEnabled(!!data.headroomEnabled);
           if (callbacks.setHeadroomUrl) callbacks.setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
@@ -103,6 +117,11 @@ export function useTokenSaverSettings(patchSetting, callbacks = {}) {
     cavemanLevel,
     ponytailEnabled,
     ponytailLevel,
+    customPromptEnabled,
+    customPrompt,
+    setCustomPrompt,
+    handleCustomPromptEnabled,
+    handleCustomPromptBlur,
     locale,
     isWenyanLocale,
     visibleCavemanLevels,
