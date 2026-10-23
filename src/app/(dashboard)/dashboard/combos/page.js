@@ -54,7 +54,18 @@ export default function CombosPage() {
   const [capacityAdapter, setCapacityAdapter] = useState(EMPTY_CAPACITY_ADAPTER);
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const { copied, copy } = useCopyToClipboard();
+
+  // Case-insensitive search over the combo name and its model ids, so both
+  // "deepseek" and "deepseek-v4.1-flash" find the right rows.
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredCombos = normalizedQuery
+    ? combos.filter((c) => {
+        if (String(c.name || "").toLowerCase().includes(normalizedQuery)) return true;
+        return (c.models || []).some((m) => String(m).toLowerCase().includes(normalizedQuery));
+      })
+    : combos;
 
   const fetchData = async () => {
     try {
@@ -216,9 +227,34 @@ export default function CombosPage() {
             <li><span className="font-medium text-text-main">Fusion</span> — queries all models in parallel, then a judge synthesizes one answer. Best quality, but costs the most: every request bills all panel models + the judge (N+1 calls)</li>
           </ul>
         </div>
-        <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto whitespace-nowrap">
-          Create Combo
-        </Button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+          <div className="relative w-full sm:w-64">
+            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-text-muted">
+              search
+            </span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search combos…"
+              aria-label="Search combos"
+              className="w-full rounded-[10px] border border-transparent bg-surface-2 py-2 pl-10 pr-9 text-sm text-text-main transition-all duration-150 ease-out placeholder-text-muted/70 focus:border-brand-500/40 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-text-muted transition-colors hover:text-text-main"
+              >
+                <span className="material-symbols-outlined text-[16px]">close</span>
+              </button>
+            )}
+          </div>
+          <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto whitespace-nowrap">
+            Create Combo
+          </Button>
+        </div>
       </div>
 
       {/* Combos List */}
@@ -235,9 +271,19 @@ export default function CombosPage() {
             </Button>
           </div>
         </Card>
+      ) : filteredCombos.length === 0 ? (
+        <Card>
+          <div className="text-center py-10">
+            <p className="text-text-main font-medium mb-1">No combos match “{searchQuery.trim()}”</p>
+            <p className="text-sm text-text-muted mb-4">Try a shorter query, or clear the search to see all {combos.length} combos.</p>
+            <Button variant="secondary" onClick={() => setSearchQuery("")}>
+              Clear search
+            </Button>
+          </div>
+        </Card>
       ) : (
         <div className="flex flex-col gap-4">
-          {combos.map((combo) => (
+          {filteredCombos.map((combo) => (
             <ComboCard
               key={combo.id}
               combo={combo}
