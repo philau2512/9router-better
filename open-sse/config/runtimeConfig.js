@@ -37,8 +37,21 @@ export const MEMORY_CONFIG = {
   directAgentsMaxSize: 30,
 };
 
+// Parse a positive integer env override, falling back to a default.
+function envMs(name, def) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return def;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+function envUrl(name, def) {
+  const raw = process.env[name]?.trim();
+  return raw || def;
+}
+
 // Stream stall timeout: abort if no chunk received within this duration
-export const STREAM_STALL_TIMEOUT_MS = 5 * 60 * 1000;
+export const STREAM_STALL_TIMEOUT_MS = envMs("STREAM_STALL_TIMEOUT_MS", 360 * 1000);
 
 // Semantic stall timeout: abort if generated content size hasn't grown within this duration
 export const STREAM_SEMANTIC_STALL_TIMEOUT_MS =
