@@ -372,6 +372,7 @@ export default function ModelSelectModal({
       "stt",
       "embedding",
       "imageToText",
+      "systemone",
     ]);
     // For these kinds, providers without hardcoded models can still be picked (provider-as-model fallback)
     const ALLOW_PROVIDER_FALLBACK_KINDS = new Set(["tts", "image", "webFetch"]);
