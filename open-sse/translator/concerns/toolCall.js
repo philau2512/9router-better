@@ -205,3 +205,7 @@ export function shouldDefaultClaudeToolType(provider, finalFormat, tools, PROVID
     && PROVIDERS?.[provider]?.quirks?.requireClaudeToolType === true
   );
 }
+
+export function fallbackToolCallId(index) {
+  return index === undefined ? `call_${Date.now()}` : `call_${index}_${Date.now()}`;
+}
