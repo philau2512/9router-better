@@ -44,6 +44,11 @@ export const STREAM_STALL_TIMEOUT_MS = 5 * 60 * 1000;
 export const STREAM_SEMANTIC_STALL_TIMEOUT_MS =
   parseInt(process.env.STREAM_SEMANTIC_STALL_TIMEOUT_MS, 10) || 60 * 1000;
 
+// Combo empty-content failover: how long a 2xx stream may be held while waiting for its first
+// content-bearing frame before committing to that model (fail-open on expiry).
+// Env: EMPTY_PEEK_DEADLINE_MS.
+export const EMPTY_PEEK_DEADLINE_MS = envMs("EMPTY_PEEK_DEADLINE_MS", 45 * 1000);
+
 // Fetch connect timeout: abort if upstream doesn't return response headers within this duration
 export const FETCH_CONNECT_TIMEOUT_MS = 60 * 1000;
 
