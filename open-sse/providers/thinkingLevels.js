@@ -58,6 +58,17 @@ const PATTERN_THINKING = [
   // DeepSeek v4.* (Alibaba MaaS, probed live): effort low|medium|high|xhigh|max
   // all 200 via output_config.effort; "none" is a 400 on the anthropic route
   // (disable thinking instead). none kept for the picker = disable.
+  // ⚠️ The codebuddy-cn exact ids below MUST stay above this unqualified glob —
+  // PATTERN_THINKING is first-match-wins, so a later provider-qualified entry
+  // would never fire for dotted ids like deepseek-v4.1-flash.
+  { provider: "codebuddy-cn", pattern: "deepseek-v4-pro",     levels: ["low", "high", "xhigh"] },
+  { provider: "codebuddy-cn", pattern: "deepseek-v4.1-flash", levels: ["low", "high", "max"] },
+  // OpenCode Zen free tier (oc / ocz) — the free id of the same v4.1-flash model
+  // publishes low|high|max as well, and unlike DeepSeek's own API the upstream
+  // forwards the level verbatim (no low→high collapse). The generic
+  // *deepseek-v4.* glob below would advertise medium/xhigh, which the model does
+  // not serve, so this entry MUST stay above it.
+  { pattern: "*deepseek-v4.1-flash-free*", levels: ["low", "high", "max"] },
   { pattern: "*deepseek-v4.*", levels: ["none", "low", "medium", "high", "xhigh", "max"] },
   // codebuddy-cn per-model effort sets — the server's product-config payload
   // publishes `reasoning.supportedEfforts` per model. NOTE: the chat endpoint
