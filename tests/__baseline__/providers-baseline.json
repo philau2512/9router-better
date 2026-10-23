@@ -64,7 +64,7 @@
     "clientId": "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
     "format": "antigravity",
     "headers": {
-      "User-Agent": "antigravity/ide/2.22.0 darwin/arm64"
+      "User-Agent": "antigravity/hub/2.24.0 darwin/arm64"
     },
     "serviceKinds": [
       "llm",

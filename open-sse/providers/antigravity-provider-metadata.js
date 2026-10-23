@@ -58,6 +58,16 @@ export const ANTIGRAVITY_STATIC_MODELS = [
     upstreamModelId: "gemini-4-argon-high(high)",
   },
   {
+    id: "gemini-4-argon-medium",
+    name: "Gemini 4 Argon (Medium)",
+    upstreamModelId: "gemini-4-argon-medium(medium)",
+  },
+  {
+    id: "gemini-4-argon-low",
+    name: "Gemini 4 Argon (Low)",
+    upstreamModelId: "gemini-4-argon-low(low)",
+  },
+  {
     id: "gemini-3.8-flash-high",
     name: "Gemini 3.8 Flash (High)",
     upstreamModelId: "gemini-3.8-flash-tiered(high)",

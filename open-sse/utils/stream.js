@@ -126,6 +126,7 @@ export function createSSEStream(options = {}) {
 
   let buffer = "";
   let usage = null;
+  let completionFlushTimer = null;
 
   // Tool-call ids already sent to the client, keyed by the tool-call index.
   // A late fragment that opens a NEW index without an id must not reach the
