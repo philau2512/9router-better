@@ -3,6 +3,18 @@ import { nowSec } from "./_base.js";
 
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
+function resolveImageInput(input) {
+  if (!input || typeof input !== "string") return null;
+  const dataUriMatch = input.match(/^data:(image\/[^;]+);base64,(.+)$/);
+  if (dataUriMatch) {
+    return { inlineData: { mimeType: dataUriMatch[1], data: dataUriMatch[2] } };
+  }
+  if (/^[A-Za-z0-9+/]/.test(input) && input.length > 100 && !input.startsWith("http")) {
+    return { inlineData: { mimeType: "image/png", data: input } };
+  }
+  return null;
+}
+
 const provider = {
   buildUrl: (model, creds) => {
     const apiKey = creds?.apiKey || creds?.accessToken;
@@ -10,10 +22,18 @@ const provider = {
     return `${BASE_URL}/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
   },
   buildHeaders: () => ({ "Content-Type": "application/json" }),
-  buildBody: (_model, body) => ({
-    contents: [{ parts: [{ text: body.prompt }] }],
-    generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-  }),
+  buildBody: (_model, body) => {
+    const parts = [{ text: body.prompt }];
+    const imageInput = body.image || (Array.isArray(body.images) && body.images[0]);
+    if (imageInput) {
+      const inlineData = resolveImageInput(imageInput);
+      if (inlineData) parts.unshift(inlineData);
+    }
+    return {
+      contents: [{ parts }],
+      generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+    };
+  },
   normalize: (responseBody, prompt) => {
     const parts = responseBody.candidates?.[0]?.content?.parts || [];
     const images = parts
