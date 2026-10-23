@@ -564,6 +564,10 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
     }
   }
 
+  // Protocol adapters may need Node's HTTP/1 transport on the direct path.
+  // Keep proxy/no-proxy resolution and strict-proxy enforcement here.
+  if (!proxyUrl && options.directFetch) return await options.directFetch(url, options);
+
   // Use pooled undici Agent for direct requests (connection reuse, HTTP/2)
   const directAgent = await getDirectAgent(targetUrl);
   if (directAgent) {

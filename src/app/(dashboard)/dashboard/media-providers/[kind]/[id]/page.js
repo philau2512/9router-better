@@ -3,6 +3,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
+  Card,
   Badge,
   Button,
   AddCustomEmbeddingModal,
@@ -10,6 +11,7 @@ import {
   ProviderInfoCard,
 } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
+import { OAUTH_PROVIDERS } from "@/shared/constants/providers";
 import ConnectionsCard from "@/app/(dashboard)/dashboard/providers/components/ConnectionsCard";
 import { WEB_LOGIN_PROVIDERS } from "@/app/(dashboard)/dashboard/providers/components/WebLoginButton";
 import ModelsCard from "@/app/(dashboard)/dashboard/providers/components/ModelsCard";
@@ -181,6 +183,11 @@ export default function MediaProviderDetailPage() {
       {/* Connections — xai also lists grok-cli OAuth (same as /providers/xai) */}
       {!isCustom && provider.noAuth ? (
         <NoAuthProxyCard providerId={id} />
+      ) : OAUTH_PROVIDERS[id] ? (
+        <Card>
+          <p className="text-sm text-text-muted mb-3">This service shares your existing OAuth connections.</p>
+          <Link href={`/dashboard/providers/${id}`} className="text-primary hover:underline">Manage OAuth connections →</Link>
+        </Card>
       ) : (
         <ConnectionsCard
           providerId={id}
