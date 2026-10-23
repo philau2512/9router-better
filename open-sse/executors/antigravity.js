@@ -226,6 +226,7 @@ export class AntigravityExecutor extends BaseExecutor {
       // Build simplified contents — keep text and inlineData (reference images), merge all user messages
       const contents = [];
       const srcContents = body.request?.contents || body.contents || [];
+      for (const c of srcContents) {
         const imageParts = (c.parts || []).flatMap((p) => {
           if (p.text !== undefined) return [{ text: p.text }];
           if (p.inlineData?.data) return [{ inlineData: p.inlineData }];
