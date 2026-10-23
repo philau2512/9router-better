@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import "../translator/registerAll.js";
 
 const { executeMock } = vi.hoisted(() => ({
   executeMock: vi.fn(),
@@ -210,7 +211,92 @@ describe("handleChatCore Headroom diagnostics", () => {
     expect(logs).not.toContain(original);
   });
 
-  it("warns when Headroom reports savings but outbound body barely shrinks", async () => {
+  it("sends compressed Responses tool output through the Antigravity translator to its executor", async () => {
+    const original = "search output ".repeat(1000);
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    global.fetch = vi.fn(async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        messages: payload.messages.map((message) => ({ ...message, content: "short result" })),
+        tokens_before: 1000, tokens_after: 10, tokens_saved: 990,
+      }));
+    });
+
+    await handleChatCore({
+      body: {
+        model: "gemini-2.5-flash", stream: true,
+        input: [
+          { type: "function_call", call_id: "call_1", name: "search", arguments: '{"query":"symbol"}' },
+          { type: "function_call_output", call_id: "call_1", output: original },
+          { role: "user", content: "continue" },
+        ],
+        tools: [{ type: "function", name: "search", parameters: { type: "object" } }],
+      },
+      modelInfo: { provider: "antigravity", model: "gemini-2.5-flash" },
+      credentials: { accessToken: "test-token", projectId: "test-project" },
+      sourceFormatOverride: "openai-responses",
+      log, connectionId: "test-conn", headroomEnabled: true, headroomUrl: "http://localhost:8787",
+      rtkEnabled: false, cavemanEnabled: false, ponytailEnabled: false,
+      clientRawRequest: { endpoint: "/v1/responses", body: {}, headers: {} },
+    });
+
+    expect(global.fetch).toHaveBeenCalledOnce();
+    expect(executeMock).toHaveBeenCalledOnce();
+    const outbound = executeMock.mock.calls[0][0].body;
+    const parts = outbound.request.contents.flatMap((content) => content.parts);
+    expect(parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ functionResponse: expect.objectContaining({ id: "call_1", response: { result: { result: "short result" } } }) }),
+      expect.objectContaining({ functionCall: expect.objectContaining({ name: "search", args: { query: "symbol" } }) }),
+    ]));
+    expect(JSON.stringify(outbound)).not.toContain(original);
+    expect(log.info).toHaveBeenCalledWith("HEADROOM", expect.stringContaining("reported token delta=990"));
+  });
+
+  it("does not warn about healthy message compression when tools dominate the body", async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const original = "x".repeat(1000);
+    const compressed = "x".repeat(500);
+    const tools = [{
+      type: "function",
+      function: { name: "lookup", description: "tool description".repeat(10000) },
+    }];
+    global.fetch = vi.fn(async () => new Response(JSON.stringify({
+      messages: [{ role: "user", content: compressed }],
+      tokens_before: 1000,
+      tokens_after: 500,
+      tokens_saved: 500,
+    }), { status: 200 }));
+
+    await handleChatCore({
+      body: { model: "gpt-4o", stream: false, messages: [{ role: "user", content: original }], tools },
+      modelInfo: { provider: "openai", model: "gpt-4o" },
+      credentials: { apiKey: "test-key", providerSpecificData: {} },
+      log,
+      connectionId: "test-conn",
+      headroomEnabled: true,
+      headroomUrl: "http://localhost:8787",
+      rtkEnabled: false,
+      cavemanEnabled: false,
+      ponytailEnabled: false,
+      clientRawRequest: {
+        endpoint: "/v1/chat/completions",
+        body: {},
+        headers: { accept: "application/json" },
+      },
+    });
+
+    expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        messages: [{ role: "user", content: compressed }],
+        tools,
+      }),
+    }));
+    expect(log.warn.mock.calls.filter(([tag]) => tag === "HEADROOM")).toEqual([]);
+    expect(log.info).toHaveBeenCalledWith("HEADROOM", expect.stringContaining("effective=0.3%"));
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain(tools[0].function.description);
+  });
+
+  it("warns when Headroom reports savings but messages barely shrink", async () => {
     const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const original = "x".repeat(1000);
     const nearlySame = "x".repeat(990);
