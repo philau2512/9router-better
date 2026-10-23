@@ -251,7 +251,6 @@ export async function handleChatCore({
     credentials.runtimeTransport = useTransport;
   }
   const stripList = getModelStrip(alias, model);
-  const upstreamModel = getModelUpstreamId(alias, model) || model;
 
   // Inject provider-level thinking config override (only if client hasn't set)
   // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
@@ -273,6 +272,9 @@ export async function handleChatCore({
     const _cachedThinking = _replayKey ? getCachedThinking(_replayKey) : null;
     if (_cachedThinking) body = injectThinkingReplay(body, _cachedThinking);
   }
+
+  const upstreamModel = getModelUpstreamId(alias, model, body) || model;
+
 
   const clientRequestedStreaming =
     body.stream === true ||

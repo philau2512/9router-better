@@ -31,10 +31,6 @@ export const ANTIGRAVITY_USAGE_ENDPOINT_SETS = {
 };
 
 export const ANTIGRAVITY_MODEL_ALIASES = {
-  "gemini-3.8-flash": "gemini-3.8-flash-tiered",
-  "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
-  "gemini-3.8-flash-medium": "gemini-3.8-flash-tiered",
-  "gemini-3.8-flash-low": "gemini-3.8-flash-tiered",
   "gemini-3.7-flash": "gemini-3.7-flash-high",
   "gemini-3.7-flash-thinking": "gemini-3.7-flash-high",
   "gemini-3.6-flash": "gemini-3.6-flash-high",
@@ -70,17 +66,22 @@ export const ANTIGRAVITY_STATIC_MODELS = [
   {
     id: "gemini-3.8-flash-high",
     name: "Gemini 3.8 Flash (High)",
-    upstreamModelId: "gemini-3.8-flash-tiered(high)",
+    upstreamModelId: "gemini-3.8-flash-high(high)",
   },
   {
     id: "gemini-3.8-flash-medium",
     name: "Gemini 3.8 Flash (Medium)",
-    upstreamModelId: "gemini-3.8-flash-tiered(medium)",
+    upstreamModelId: "gemini-3.8-flash-medium(medium)",
   },
   {
     id: "gemini-3.8-flash-low",
     name: "Gemini 3.8 Flash (Low)",
-    upstreamModelId: "gemini-3.8-flash-tiered(low)",
+    upstreamModelId: "gemini-3.8-flash-low(low)",
+  },
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    upstreamModelId: "gemini-3.8-flash-medium(medium)",
   },
   {
     id: "gemini-3.7-flash",
