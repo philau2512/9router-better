@@ -96,10 +96,10 @@ describe("Cursor live model catalog", () => {
       providerSpecificData: { machineId: "machine-id" },
     };
 
-    await expect(resolveCursorModels(credentials, { fetchImpl })).resolves.toEqual({
+    await expect(resolveCursorModels(credentials)).resolves.toEqual({
       models: [{ id: "claude-4.6-opus", name: "Claude 4.6 Opus" }],
     });
-    await expect(resolveCursorModels(credentials, { fetchImpl })).resolves.toEqual({
+    await expect(resolveCursorModels(credentials)).resolves.toEqual({
       models: [{ id: "claude-4.6-opus", name: "Claude 4.6 Opus" }],
     });
 
