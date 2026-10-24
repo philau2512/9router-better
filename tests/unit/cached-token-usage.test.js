@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { canonicalizeUsage, extractUsage, mergeUsage } from "../../open-sse/utils/usageTracking.js";
+import { describe, it, expect, vi } from "vitest";
+import { canonicalizeUsage, extractUsage, mergeUsage, logUsage } from "../../open-sse/utils/usageTracking.js";
 import { calculateCostFromTokens } from "../../open-sse/providers/pricing.js";
 import { buildUsage, toOpenAIUsage } from "../../open-sse/translator/concerns/usage.js";
 
@@ -196,5 +196,39 @@ describe("Kiro usage pass-through", () => {
     expect(out.prompt_tokens_details).toBeDefined();
     expect(out.prompt_tokens_details.cached_tokens).toBe(200);
     expect(out.prompt_tokens_details.cache_creation_tokens).toBe(50);
+  });
+});
+
+describe("logUsage with cache formats", () => {
+  it("folds Claude exclusive cache into total in tokens and calculates correct percentage", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    logUsage("antigravity", {
+      input_tokens: 3431,
+      output_tokens: 177,
+      cache_read_input_tokens: 114320,
+    });
+
+    expect(logSpy).toHaveBeenCalled();
+    const logged = logSpy.mock.calls[0][0];
+    expect(logged).toContain("in=117751");
+    expect(logged).toContain("out=177");
+    expect(logged).toContain("cache_read=114320 (97.09%)");
+    logSpy.mockRestore();
+  });
+
+  it("handles OpenAI format with prompt_tokens inclusive of cache", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    logUsage("openai", {
+      prompt_tokens: 117751,
+      completion_tokens: 177,
+      prompt_tokens_details: { cached_tokens: 114320 },
+    });
+
+    expect(logSpy).toHaveBeenCalled();
+    const logged = logSpy.mock.calls[0][0];
+    expect(logged).toContain("in=117751");
+    expect(logged).toContain("out=177");
+    expect(logged).toContain("cache_read=114320 (97.09%)");
+    logSpy.mockRestore();
   });
 });

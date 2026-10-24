@@ -55,6 +55,14 @@ describe("console-log logParser", () => {
       expect(parsedUsage.metadata.cacheRead).toBe(42496);
       expect(parsedUsage.metadata.cachePct).toBe(96.89);
       expect(parsedUsage.metadata.account).toBe("dceed7f8...");
+
+      // Legacy/exclusive line where in=3431 only counted uncached tokens and cachePct > 100%
+      const legacyLine = "[09:25:21] 📊 [USAGE] ANTIGRAVITY | in=3431 | out=177 | account=92561275... | cache_read=114320 (3331.97%)";
+      const parsedLegacy = parseLogLine(legacyLine);
+      expect(parsedLegacy.metadata.tokensIn).toBe(117751); // 3431 + 114320
+      expect(parsedLegacy.metadata.tokensOut).toBe(177);
+      expect(parsedLegacy.metadata.cacheRead).toBe(114320);
+      expect(parsedLegacy.metadata.cachePct).toBe(97.09);
     });
   });
 
