@@ -916,7 +916,6 @@ export default function ConnectionsCard({
                 <WebLoginButton providerId={loginProviderId} onConnected={fetch_} />
               )}
             </div>
-            </div>
           </>
         )}
       </Card>

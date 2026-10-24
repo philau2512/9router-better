@@ -7,6 +7,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModal, CapacityBadges, Select, Toggle, Badge, SmartPolicyModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import Link from "next/link";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, resolveProviderId, AI_PROVIDERS } from "@/shared/constants/providers";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
