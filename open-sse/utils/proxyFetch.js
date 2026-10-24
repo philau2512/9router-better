@@ -177,7 +177,7 @@ const bypassKeepAliveAgent = new https.Agent({
   keepAliveMsecs: 1000,
   maxSockets: 100,
   maxFreeSockets: 10,
-  timeout: 30000,
+  timeout: 120000,
   lookup: (hostname, options, callback) => {
     resolveRealIP(hostname)
       .then((ip) => {
@@ -388,11 +388,15 @@ async function createBypassRequest(
     }
 
     if (options.body) {
-      req.write(
+      const bodyPayload =
         typeof options.body === "string"
           ? options.body
-          : JSON.stringify(options.body),
-      );
+          : JSON.stringify(options.body);
+      const byteLength = Buffer.byteLength(bodyPayload);
+      if (!req.getHeader("content-length")) {
+        req.setHeader("Content-Length", byteLength);
+      }
+      req.write(bodyPayload);
     }
     req.end();
   });
@@ -455,7 +459,7 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   }
 
   // MITM DNS bypass: for known MITM-intercepted hosts, resolve real IP to avoid DNS spoof
-  if (shouldBypassMitmDns(targetUrl)) {
+  if (await shouldBypassMitmDns(targetUrl)) {
     if (proxyUrl) {
       timing.mode = "proxy-mitm-bypass";
       timing.proxyStartAt = Date.now();
