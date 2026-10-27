@@ -73,7 +73,7 @@ Antigravity has local protocol and translation safeguards that must be kept as o
 4. **Strict alternating role normalization**: `normalizeGeminiContents` must never merge
    a `functionResponse` turn with a follow-up plain text `user` turn in the same message.
    When consecutive same-role turns cannot be merged, insert a synthetic bridge turn
-   (`{ role: "model", parts: [{ text: "..." }] }`) to maintain strict alternating
+   (`{ role: "model", parts: [{ text: "I have received the tool results." }] }`) to maintain strict alternating
    `user -> model -> user` turns and avoid `400 INVALID_ARGUMENT`.
 
 Do not replace this with signature-only filtering: a `thoughtSignature` without

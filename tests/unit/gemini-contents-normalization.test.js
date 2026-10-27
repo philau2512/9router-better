@@ -77,9 +77,34 @@ describe("normalizeGeminiContents terminal turn guards", () => {
     const contents = [{ role: "model", parts: [{ text: "prefill" }] }];
     const out = normalizeGeminiContents(contents);
     expect(out).toHaveLength(3);
-    expect(out[0]).toEqual({ role: "user", parts: [{ text: "..." }] });
+    expect(out[0]).toEqual({ role: "user", parts: [{ text: "Continue." }] });
     expect(out[1]).toEqual({ role: "model", parts: [{ text: "prefill" }] });
     expect(out[2]).toEqual({ role: "user", parts: [{ text: "Continue." }] });
+  });
+
+  it("inserts semantic model bridge turn when user functionResponse is followed by user text", () => {
+    const contents = [
+      {
+        role: "user",
+        parts: [{ functionResponse: { name: "readFile", response: { content: "code" } } }]
+      },
+      {
+        role: "user",
+        parts: [{ text: "continue with next step" }]
+      }
+    ];
+    const out = normalizeGeminiContents(contents);
+    expect(out).toHaveLength(3);
+    expect(out[0].role).toBe("user");
+    expect(out[0].parts[0].functionResponse).toBeDefined();
+    expect(out[1]).toEqual({
+      role: "model",
+      parts: [{ text: "I have received the tool results." }]
+    });
+    expect(out[2]).toEqual({
+      role: "user",
+      parts: [{ text: "continue with next step" }]
+    });
   });
 
   it("does not mutate payloads already ending with a user turn", () => {

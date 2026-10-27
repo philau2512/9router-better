@@ -152,10 +152,11 @@ function normalizeGeminiContents(contents, model = null) {
       // If we cannot merge because one is functionResponse and one is text,
       // insert a synthetic bridge turn to preserve strict alternating roles (user -> model -> user).
       // Consecutive same-role turns trigger 400 INVALID_ARGUMENT on Gemini/Antigravity API.
+      // Use explicit semantic acknowledgment rather than "..." to prevent the LLM from mimicking dots.
       if (c.role === "user") {
-        out.push({ role: "model", parts: [{ text: "..." }] });
+        out.push({ role: "model", parts: [{ text: "I have received the tool results." }] });
       } else if (c.role === "model") {
-        out.push({ role: "user", parts: [{ text: "..." }] });
+        out.push({ role: "user", parts: [{ text: "Continue." }] });
       }
     }
     const finalParts = frLast && c.role === "user" ? moveFunctionResponsesLast(parts) : parts;
