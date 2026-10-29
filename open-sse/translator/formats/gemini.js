@@ -620,23 +620,41 @@ export function normalizeGeminiContents(contents, model = null) {
     if (parts.length === 0) continue;
     const last = out.at(-1);
     if (last?.role === c.role) {
-      const mixedFrAndText =
-        (contentHasFunctionResponse(last) && contentHasPlainText(c)) ||
-        (contentHasPlainText(last) && contentHasFunctionResponse(c));
-      if (!mixedFrAndText) {
-        last.parts.push(...parts);
-        if (frLast) last.parts = moveFunctionResponsesLast(last.parts);
+      if (contentHasFunctionResponse(last) && contentHasPlainText(c)) {
+        // Embed user follow-up text into the function response data instead of
+        // inserting a synthetic model turn (which pollutes conversation history
+        // and causes the model to mimic dummy acknowledgements and stop).
+        const textParts = c.parts.filter(p => typeof p?.text === "string" && p.text.length > 0);
+        const combinedText = textParts.map(p => p.text).join("\n\n");
+        const frParts = last.parts.filter(p => p.functionResponse);
+        const targetFr = frParts.at(-1)?.functionResponse;
+        if (targetFr && combinedText) {
+          if (typeof targetFr.response === "object" && targetFr.response !== null) {
+            targetFr.response.user_instruction = combinedText;
+          } else {
+            targetFr.response = { result: targetFr.response, user_instruction: combinedText };
+          }
+        }
         continue;
       }
-      // If we cannot merge because one is functionResponse and one is text,
-      // insert a synthetic bridge turn to preserve strict alternating roles (user -> model -> user).
-      // Consecutive same-role turns trigger 400 INVALID_ARGUMENT on Gemini/Antigravity API.
-      // Use explicit semantic acknowledgment rather than "..." to prevent the LLM from mimicking dots.
-      if (c.role === "user") {
-        out.push({ role: "model", parts: [{ text: "I have received the tool results." }] });
-      } else if (c.role === "model") {
-        out.push({ role: "user", parts: [{ text: "Continue." }] });
+      if (contentHasPlainText(last) && contentHasFunctionResponse(c)) {
+        const textParts = last.parts.filter(p => typeof p?.text === "string" && p.text.length > 0);
+        const combinedText = textParts.map(p => p.text).join("\n\n");
+        const frParts = c.parts.filter(p => p.functionResponse);
+        const targetFr = frParts.at(-1)?.functionResponse;
+        if (targetFr && combinedText) {
+          if (typeof targetFr.response === "object" && targetFr.response !== null) {
+            targetFr.response.user_instruction = combinedText;
+          } else {
+            targetFr.response = { result: targetFr.response, user_instruction: combinedText };
+          }
+        }
+        last.parts = frParts;
+        continue;
       }
+      last.parts.push(...parts);
+      if (frLast) last.parts = moveFunctionResponsesLast(last.parts);
+      continue;
     }
     const finalParts = frLast && c.role === "user" ? moveFunctionResponsesLast(parts) : parts;
     out.push({ ...c, parts: [...finalParts] });

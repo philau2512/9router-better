@@ -70,11 +70,11 @@ Antigravity has local protocol and translation safeguards that must be kept as o
    fallback types for untyped properties/items, and insert a `{ reason: { type: "string" } }`
    placeholder for empty object schemas. Unresolved `$ref` or missing `type` fields trigger
    immediate `400 INVALID_ARGUMENT` rejections from the Antigravity endpoint.
-4. **Strict alternating role normalization**: `normalizeGeminiContents` must never merge
-   a `functionResponse` turn with a follow-up plain text `user` turn in the same message.
-   When consecutive same-role turns cannot be merged, insert a synthetic bridge turn
-   (`{ role: "model", parts: [{ text: "I have received the tool results." }] }`) to maintain strict alternating
-   `user -> model -> user` turns and avoid `400 INVALID_ARGUMENT`.
+4. **Strict alternating role normalization & zero context pollution**: `normalizeGeminiContents` must never merge
+   a `functionResponse` turn with a follow-up plain text `user` turn into separate mixed parts in the same message.
+   Instead of inserting synthetic model bridge turns (`"..."` or dummy text which Gemini mimics and halts execution),
+   embed follow-up user instructions directly into `functionResponse.response.user_instruction` while preserving
+   strict alternating `user -> model -> user` turns.
 
 Do not replace this with signature-only filtering: a `thoughtSignature` without
 `thought: true` can accompany visible text and is required for tool continuity.

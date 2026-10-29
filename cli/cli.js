@@ -100,6 +100,18 @@ if (args[0] === "connect" || args[0] === "show") {
   return;
 }
 
+// `9router taskbar` launches the Windows Taskbar Speed & Stream Monitor
+if (args[0] === "taskbar") {
+  const { run } = require("./src/cli/commands/taskbar");
+  run(args.slice(1))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(`❌ ${err?.message || err}`);
+      process.exit(1);
+    });
+  return;
+}
+
 // Self-heal SQLite runtime deps (sql.js + better-sqlite3) into ~/.9router/runtime
 // so the server can resolve them via NODE_PATH. Best-effort — sql.js is required,
 // better-sqlite3 is optional. Logs to stderr only on failure.
@@ -131,6 +143,7 @@ let noBrowser = false;
 let skipUpdate = false;
 let showLog = false;
 let trayMode = false;
+let taskbarMode = false;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--port" || args[i] === "-p") {
@@ -148,6 +161,8 @@ for (let i = 0; i < args.length; i++) {
   } else if (args[i] === "--tray" || args[i] === "-t") {
     trayMode = true;
     process.env.TRAY_MODE = "1";
+  } else if (args[i] === "--taskbar") {
+    taskbarMode = true;
   } else if (args[i] === "doctor") {
     runDoctor();
     process.exit(process.exitCode || 0);
@@ -161,12 +176,14 @@ Options:
   -n, --no-browser    Don't open browser automatically
   -l, --log           Show server logs (default: hidden)
   -t, --tray          Run in system tray mode (background)
+  --taskbar           Launch Windows Taskbar Speed Monitor alongside server
   doctor              Run local diagnostics without starting the server
   --skip-update       Skip auto-update check
   -h, --help          Show this help message
   -v, --version       Show version
 
 Commands:
+  taskbar             Launch native Windows Taskbar Speed & Stream Monitor
   connect <server-url> Configure Claude Code for a remote 9router server
                       (npx 9router connect http://host:20128 — no install needed)
   show [tool…]        Show each CLI tool's current 9router config and models
@@ -945,6 +962,9 @@ async function startServer(latestVersionPromise) {
 
     waitServerReady(port).then(() => {
       initTrayIcon();
+      if (taskbarMode) {
+        require("./src/cli/commands/taskbar").run(["--port", String(port)]);
+      }
       console.log(
         "\n💡 Router is now running in system tray. Close this terminal if you want.",
       );
@@ -958,6 +978,9 @@ async function startServer(latestVersionPromise) {
   waitServerReady(port).then(async () => {
     // Start tray icon alongside TUI
     initTrayIcon();
+    if (taskbarMode) {
+      require("./src/cli/commands/taskbar").run(["--port", String(port)]);
+    }
 
     try {
       while (true) {

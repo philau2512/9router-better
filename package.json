@@ -16,6 +16,8 @@
     "cli:pack": "npm --prefix cli run pack:cli",
     "cli:publish": "npm --prefix cli run publish:cli",
     "build:cli": "node cli/scripts/build-cli.js",
+    "build:taskbar": "node scripts/build-taskbar-monitor.mjs",
+    "taskbar": "node scripts/build-taskbar-monitor.mjs && start \"\" dist/9router-taskbar.exe",
     "build:exe": "node cli/scripts/build-cli.js && node scripts/build-windows-exe.mjs --skip-build",
     "lint": "eslint .",
     "smoke:docker": "node scripts/docker-runtime-smoke.cjs",

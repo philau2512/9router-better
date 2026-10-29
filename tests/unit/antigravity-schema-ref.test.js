@@ -133,12 +133,10 @@ describe("cleanJSONSchemaForAntigravity $ref dereferencing and type protection",
     ];
 
     const normalized = normalizeGeminiContents(contents);
-    expect(normalized).toHaveLength(3);
+    expect(normalized).toHaveLength(1);
     expect(normalized[0].role).toBe("user");
     expect(normalized[0].parts[0].functionResponse).toBeDefined();
-    expect(normalized[1].role).toBe("model");
-    expect(normalized[2].role).toBe("user");
-    expect(normalized[2].parts[0].text).toBe("tiếp tục đi bạn");
+    expect(normalized[0].parts[0].functionResponse.response.user_instruction).toBe("tiếp tục đi bạn");
   });
 });
 
