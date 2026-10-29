@@ -84,13 +84,48 @@ export async function resolveRealIP(hostname) {
   return await performDnsResolve(hostname);
 }
 
+const SPOOF_CHECK_CACHE = new Map();
+const SPOOF_CHECK_TTL_MS = 15_000;
+
 /**
- * Check if request should bypass MITM DNS redirect
+ * Check if the host in system DNS actually resolves to loopback (meaning /etc/hosts or local DNS spoofed it)
  */
-export function shouldBypassMitmDns(url) {
+export async function isHostSpoofedToLoopback(hostname) {
+  const cached = SPOOF_CHECK_CACHE.get(hostname);
+  const now = Date.now();
+  if (cached && now < cached.expiry) return cached.spoofed;
+
+  return new Promise((resolve) => {
+    dns.lookup(hostname, (err, address) => {
+      const spoofed =
+        !err &&
+        Boolean(
+          address === "127.0.0.1" ||
+            address === "::1" ||
+            address === "0.0.0.0" ||
+            (typeof address === "string" && address.startsWith("127.")),
+        );
+      SPOOF_CHECK_CACHE.set(hostname, {
+        spoofed,
+        expiry: now + SPOOF_CHECK_TTL_MS,
+      });
+      resolve(spoofed);
+    });
+  });
+}
+
+/**
+ * Check if request should bypass MITM DNS redirect.
+ * Only bypass if the host is in MITM_BYPASS_HOSTS AND system DNS actually resolves to loopback.
+ */
+export async function shouldBypassMitmDns(url) {
   try {
     const hostname = new URL(url).hostname;
-    return MITM_BYPASS_HOSTS.some((host) => hostname.includes(host));
+    const isTargetHost = MITM_BYPASS_HOSTS.some((host) =>
+      hostname.includes(host),
+    );
+    if (!isTargetHost) return false;
+    return await isHostSpoofedToLoopback(hostname);
   } catch {
     return false;
   }

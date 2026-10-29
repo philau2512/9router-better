@@ -211,6 +211,7 @@ async function main() {
   fs.copyFileSync(path.join(cliDir, "package.json"), path.join(stagingDir, "package.json"));
   copyDirRecursive(path.join(cliDir, "src"), path.join(stagingDir, "src"));
   copyDirRecursive(path.join(cliDir, "hooks"), path.join(stagingDir, "hooks"));
+  copyDirRecursive(path.join(cliDir, "bin"), path.join(stagingDir, "bin"));
   copyDirRecursive(cliAppDir, path.join(stagingDir, "app"));
 
   // Copy CLI runtime node_modules

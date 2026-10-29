@@ -89,13 +89,16 @@ export function extractUsageFromResponse(responseBody) {
 }
 
 export function buildRequestDetail(base, overrides = {}) {
+  const canonicalTokens = base.tokens
+    ? canonicalizeUsage(base.tokens) || base.tokens
+    : { prompt_tokens: 0, completion_tokens: 0 };
   return {
     provider: base.provider || "unknown",
     model: base.model || "unknown",
     connectionId: base.connectionId || undefined,
     timestamp: new Date().toISOString(),
     latency: base.latency || { ttft: 0, total: 0 },
-    tokens: base.tokens || { prompt_tokens: 0, completion_tokens: 0 },
+    tokens: canonicalTokens,
     performance: base.performance || null,
     request: base.request,
     providerRequest: base.providerRequest || null,
@@ -118,8 +121,15 @@ export function saveUsageStats({
 }) {
   if (!tokens || typeof tokens !== "object") return;
 
-  const inTokens = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
-  const outTokens = tokens.output_tokens ?? tokens.completion_tokens ?? 0;
+  // Canonicalize to one storage convention (prompt_tokens cache-inclusive) so
+  // cached/cache-creation tokens survive to cost calc + stats. See canonicalizeUsage.
+  const normalized = canonicalizeUsage(tokens) || {
+    prompt_tokens: tokens.prompt_tokens ?? tokens.input_tokens ?? 0,
+    completion_tokens: tokens.completion_tokens ?? tokens.output_tokens ?? 0,
+  };
+
+  const inTokens = normalized.prompt_tokens;
+  const outTokens = normalized.completion_tokens;
 
   if (inTokens === 0 && outTokens === 0) return;
 
@@ -138,13 +148,6 @@ export function saveUsageStats({
     );
   }
 
-  // Canonicalize to one storage convention (prompt_tokens cache-inclusive) so
-  // cached/cache-creation tokens survive to cost calc + stats. See canonicalizeUsage.
-  const normalized = canonicalizeUsage(tokens) || {
-    prompt_tokens: tokens.prompt_tokens ?? tokens.input_tokens ?? 0,
-    completion_tokens: tokens.completion_tokens ?? tokens.output_tokens ?? 0,
-  };
-
   saveRequestUsage({
     provider: provider || "unknown",
     model: model || "unknown",
@@ -158,11 +161,15 @@ export function saveUsageStats({
 }
 
 export function formatDoneLine({ usage, latency }) {
-  const u = usage || {};
-  const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;
-  const outTok = u.completion_tokens ?? u.output_tokens ?? 0;
-  const cacheRead = u.cache_read_input_tokens ?? u.cached_tokens ?? u.prompt_tokens_details?.cached_tokens ?? 0;
-  const cacheCreate = u.cache_creation_input_tokens ?? 0;
+  const canonical = canonicalizeUsage(usage) || usage || {};
+  const inTok = canonical.prompt_tokens ?? canonical.input_tokens ?? 0;
+  const outTok = canonical.completion_tokens ?? canonical.output_tokens ?? 0;
+  const cacheRead =
+    canonical.cached_tokens ??
+    canonical.cache_read_input_tokens ??
+    canonical.prompt_tokens_details?.cached_tokens ??
+    0;
+  const cacheCreate = canonical.cache_creation_input_tokens ?? 0;
   let inStr = `IN ${inTok}`;
   if (cacheRead || cacheCreate) {
     const parts = [];

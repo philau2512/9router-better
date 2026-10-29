@@ -53,7 +53,7 @@ const DEFAULT_SETTINGS = {
   outboundProxyUrl: "",
   outboundNoProxy: "",
   connectionProxyHeadersTimeoutMs:
-    parseInt(process.env.CONNECTION_PROXY_HEADERS_TIMEOUT_MS) || 30000,
+    parseInt(process.env.CONNECTION_PROXY_HEADERS_TIMEOUT_MS) || 120000,
   mitmRouterBaseUrl: DEFAULT_MITM_ROUTER_BASE,
   dnsToolEnabled: {},
   rtkEnabled: true,
@@ -71,6 +71,17 @@ const DEFAULT_SETTINGS = {
   // Deep request/response file logs under logs/ (was ENABLE_REQUEST_LOGS only)
   enableRequestLogs: process.env.ENABLE_REQUEST_LOGS === "true",
   backgroundTokenRefreshEnabled: true,
+  ponytailEnabled: false,
+  ponytailLevel: "full",
+  // User-authored system prompt, injected independently of the built-in savers.
+  customPromptEnabled: false,
+  customPrompt: "",
+  pxpipeEnabled: false,
+  pxpipeAutoInstall: true,
+  pxpipeMinChars: 25000,
+  pxpipeTimeoutMs: 15000,
+  // Per-provider user header overrides applied at dispatch: { [providerId]: { headers: {..} } }
+  providerOverrides: {},
 };
 
 async function readRaw() {

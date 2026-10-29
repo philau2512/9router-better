@@ -219,6 +219,7 @@ export default function APIPageClient({ machineId }) {
 
       <RemoteAccessModals remoteAccess={remoteAccess} tsLogRef={tsLogRef} />
 
+
       <ConfirmModal
         isOpen={!!confirmState}
         onClose={() => setConfirmState(null)}

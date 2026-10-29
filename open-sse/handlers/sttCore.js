@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createErrorResult } from "../utils/error.js";
+import { transcribeGeminiLive } from "./geminiLiveStt.js";
+import { transcribeCodex } from "./codexStt.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
 import { AI_PROVIDERS } from "../../src/shared/constants/providers.js";
@@ -342,6 +344,8 @@ export async function handleSttCore({
   apiKey,
   sttConfig,
   transport,
+  signal,
+  proxyOptions,
 }) {
   const file = formData.get("file");
   if (!file)
@@ -357,6 +361,16 @@ export async function handleSttCore({
       `Provider '${provider}' does not support STT`,
     );
 
+  // OAuth transcription uses a fixed ChatGPT endpoint; never honor connection URL overrides.
+  if (provider === "codex" && cfg.format === "codex-transcribe") {
+    return transcribeCodex({ formData, credentials, signal, proxyOptions });
+  }
+
+  // Per-connection endpoint override. Registry entries carry a fixed baseUrl,
+  // which is right for a named cloud service but useless for a self-hosted one
+  // whose address only the operator knows. Opt-in: absent unless the connection
+  // sets it, so cloud providers are untouched. Mirrors the custom embedding
+  // providers, which already resolve baseUrl the same way.
   const overrideUrl = credentials?.providerSpecificData?.baseUrl;
   if (overrideUrl) cfg = { ...cfg, baseUrl: String(overrideUrl).replace(/\/+$/, "") };
 

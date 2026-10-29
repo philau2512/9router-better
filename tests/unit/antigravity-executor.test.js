@@ -121,7 +121,12 @@ describe("AntigravityExecutor", () => {
       model: "gemini-3.1-flash-image",
       requestType: "image_gen",
       request: {
-        contents: [{ role: "user", parts: [{ text: "draw" }] }],
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: "draw" }, { inlineData: { data: "ignored" } }],
+          },
+        ],
         generationConfig: { imageConfig: { aspectRatio: "16:9" } },
       },
     });

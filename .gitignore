@@ -117,3 +117,4 @@ graphify-out/*
 start-dev-silent.cjs
 debug.log
 .tgrep/
+.scratch/

@@ -95,6 +95,13 @@ export const MODEL_CAPABILITIES = {
   "gpt-5.6-terra[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
   "gpt-5.6-luna[1m]": { vision: true, reasoning: true, search: true, contextWindow: 872000, maxOutput: 128000, thinkingFormat: "openai", thinkingCanDisable: false },
 
+  "sensenova-6.8-flash-lite": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    contextWindow: 1000000,
+    maxOutput: 131072,
+  },
   // Claude Fable 5.1, Opus 5.5/5, 4.6/4.7/4.8, and Kiro Sonnet 5 have 1M context + adaptive thinking (override generic claude pattern)
   "claude-fable-5-1": { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 },
   // Claude Opus 5.5 — experimental preview on Kiro (rateMultiplier: 2.0, 1M context) (#4410)
@@ -141,6 +148,24 @@ export const MODEL_CAPABILITIES = {
   "glm-5.3-flash":     { vision: true, videoInput: true, pdf: true, reasoning: true, thinkingFormat: "zai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 131072 },
   "glm-4.6v":          { vision: true, videoInput: true, reasoning: true, thinkingFormat: "zai", contextWindow: 128000, maxOutput: 32768 },
   "glm-4.5v":          { vision: true, videoInput: true, reasoning: true, thinkingFormat: "zai", contextWindow: 64000, maxOutput: 16384 },
+  // GLM-5.2 has 1M context and maxOutput 131072. An exact entry shadows the *glm-5.2*
+  // pattern completely, so it must repeat that pattern's thinkingEffortSupported or
+  // reasoning_effort is dropped for GLM-5.2 (supported from 5.2 onward).
+  "glm-5.2":           { reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 131072 },
+  // OpenCode serves the same weights under this free id from its OWN inference
+  // service, which validates the body strictly: the zai `thinking` object the
+  // *glm-5.3* pattern emits is answered
+  //   400 [unknown_parameter] invalid request body: json: unknown field "thinking"
+  // while reasoning_effort is accepted (none/minimal/low/medium/high/xhigh/max → 200).
+  // Probed live 2026-10-18 on both lanes exposing the id: /inference/v1 (provider
+  // "opencode") and /zen/v1 (provider "opencode-zen"). Mirrors the
+  // PROVIDER_CAPABILITIES["opencode-go"] override for the paid glm-5.3-flash id;
+  // the zai shape stays correct for z.ai's own lines (glm / glm-cn). codebuddy-cn
+  // is unaffected — it already resolves glm-5.3-flash to the openai shape.
+  // Known gap, shared with the paid sibling: an intent that carries no level
+  // (Claude adaptive thinking, reasoning_effort "auto") still emits literal
+  // "auto" from the generic openai branch, which this service rejects.
+  "glm-5.3-flash-free": { vision: true, videoInput: true, pdf: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 },
 
   // DeepSeek's first V4 model with image input; text limits match V4-Flash.
   "deepseek-v4-flash-vision-exp": { vision: true, reasoning: true, thinkingFormat: "deepseek", contextWindow: 1000000, maxOutput: 384000 },
@@ -180,6 +205,7 @@ const KIRO_GPT_5_6_CAPABILITIES = { vision: true, reasoning: true, search: true,
 // (lower than OpenAI API's 1.05M). Sol differs from Terra/Luna. #2720
 const CODEX_GPT_56_SOL_CAPS  = { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 372000, maxOutput: 128000 };
 const CODEX_GPT_56_DEFAULT_CAPS = { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 };
+const CODEX_EXTENDED_CAPS = { ...CODEX_GPT_56_DEFAULT_CAPS, contextWindow: 872000 };
 
 /**
  * Provider-specific capability overrides. Keyed by provider alias/id.
@@ -198,8 +224,58 @@ export const PROVIDER_CAPABILITIES = {
     "deepseek-ai/deepseek-v4-pro": { reasoning: true, thinkingFormat: "openai", contextWindow: 1000000, maxOutput: 65536 },
     "deepseek-ai/deepseek-v4-flash": { reasoning: true, thinkingFormat: "openai", contextWindow: 1000000, maxOutput: 65536 },
   },
+  // glm-5.3-flash on OpenCode Go is served by a backend that rejects the z.ai
+  // `thinking` object (400: unknown field "thinking") and wants reasoning_effort.
+  // Overrides the global entry, whose z.ai shape is correct for z.ai itself.
+  "opencode-go": {
+    "glm-5.3-flash": { vision: true, videoInput: true, pdf: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 131072 },
+    // OpenCode Go's claude-haiku-5-5 rejects `thinking.type.enabled` — the shape the
+    // global *claude*haiku* → claude-budget pattern sends — with 400: `"thinking.type.enabled"
+    // is not supported for this model. Use "thinking.type.adaptive" and "output_config.effort"`.
+    // claude-adaptive emits exactly that (adaptive switch + output_config.effort), so override
+    // the global haiku pattern for this provider only. Limits follow the model, not the
+    // pattern: the upstream catalog reports context_length 1000000 and the synced catalog
+    // maxOutput 128000 for this id (the provider override short-circuits before the
+    // catalog overlay, so maxOutput must be stated here too).
+    "claude-haiku-5-5": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  },
+  // OpenCode Free (oc) — the free lane's MiMo route is OpenRouter-backed and takes
+  // the plain OpenAI reasoning_effort enum verbatim (live probe on
+  // oc/mimo-v2.6-flash-free: none|minimal|low|medium|high|xhigh|max all 200, any
+  // other value 400 "Invalid option"; "none" really drops thinking — empty
+  // reasoning_content and reasoning_tokens 0). The global *mimo*v2.6* pattern
+  // describes Xiaomi's own API (DeepSeek-shaped `thinking` object, always on),
+  // which this lane ignores: `thinking.type:disabled` still streamed reasoning.
+  // Limits repeat the family pattern deliberately: the synced catalog carries no
+  // `opencode` limit delta for this id, so 1M/131k is what the lane already
+  // published before this override — but the override short-circuits the catalog
+  // overlay, so models.dev's free-lane listing (200000/32000) has to be applied
+  // here if a probe ever pins the lane's real window (a 200k `max_tokens` is
+  // accepted, so the 32k figure is not enforced at request validation).
+  "opencode": {
+    "mimo-v2.6-flash-free": { vision: true, audioInput: true, videoInput: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1048576, maxOutput: 131072 },
+  },
+  "commandcode": {
+    // The generic commandcode fallback (1M/384k for every unlisted model) happened
+    // to give haiku-5-5 the right context by accident. Pin it to the catalog values:
+    // GET https://api.commandcode.ai/provider/v1/models reports context_length 1000000
+    // for this id (claude-haiku-4-5-20251001 is 200000, so the 1M is per-model, not
+    // gateway-wide) — and the synced catalog carries maxOutput 128000.
+    "claude-haiku-5-5": { vision: true, reasoning: true, search: true, thinkingFormat: "commandcode", thinkingEffortSupported: true, contextWindow: 1000000, maxOutput: 128000 },
+  },
   "codex": {
     "gpt-6-astra":               { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
+    "gpt-6-sol":                 { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
+    // Without its own entry gpt-6.1-sol fell through to *gpt-6* (1.05M), overstating
+    // the Codex window like any unlisted sibling would.
+    "gpt-6.1-sol":               { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
+    "gpt-6-luna":                { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
+    "gpt-6-astra[1m]":           CODEX_EXTENDED_CAPS,
+    "gpt-6-sol[1m]":             CODEX_EXTENDED_CAPS,
+    "gpt-6-luna[1m]":            CODEX_EXTENDED_CAPS,
+    "gpt-5.6-sol[1m]":           CODEX_EXTENDED_CAPS,
+    "gpt-5.6-terra[1m]":         CODEX_EXTENDED_CAPS,
+    "gpt-5.6-luna[1m]":          CODEX_EXTENDED_CAPS,
     "gpt-5.6-sol":               CODEX_GPT_56_SOL_CAPS,
     "gpt-5.6-sol-review":        CODEX_GPT_56_SOL_CAPS,
     "gpt-5.6-terra":             CODEX_GPT_56_DEFAULT_CAPS,
@@ -336,7 +412,40 @@ export const PROVIDER_CAPABILITIES = {
   },
 };
 
+// Qoder model capability table. The model ids are opaque (`dmodel`, `kmodel`,
+// `qmodel_38max`), so the name heuristics in PATTERN_CAPABILITIES match none of
+// them — without this table every Qoder model is reported text-only and an
+// image sent by a client is replaced by a placeholder before it ever reaches
+// the model. Context/output limits mirror what /algo/api/v2/model/list reports.
+PROVIDER_CAPABILITIES["qoder"] = {
+  // Tier aliases resolve to a variable target upstream; keep them text-only and
+  // on the default window rather than guessing.
+  "auto":         { contextWindow: 200000, maxOutput: 32768 },
+  "efficient":    { contextWindow: 200000, maxOutput: 32768 },
+  "lite":         { contextWindow: 200000, maxOutput: 32768 },
+  // Concrete ids read images back, so they are vision-capable.
+  "ultimate":     { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "performance":  { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "qmodel_38max": { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "qmodel_latest":{ vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "qmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "qfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "kmodel_latest":{ vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "kmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "gmodel":       { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "gfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "dmodel":       { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "dfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "mmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  // Frontier reasoning pair; absent from many per-account catalogs, so they are
+  // routed through a static model_config (see shared/qoder/constants.js).
+  "smodel":       { vision: true, reasoning: true, contextWindow: 180000, maxOutput: 65536 },
+  "cmodel":       { vision: true, reasoning: true, contextWindow: 180000, maxOutput: 65536 },
+};
+
 // Qoder CN serves the identical model catalog from the CN gateway, so it shares
+// the intl Qoder capability table verbatim (vision/reasoning/contextWindow).
+PROVIDER_CAPABILITIES["qoder-cn"] = PROVIDER_CAPABILITIES["qoder"];
 PROVIDER_CAPABILITIES["minimax-code-global"] = PROVIDER_CAPABILITIES["minimax-code"];
 
 /**
@@ -406,6 +515,9 @@ export const PATTERN_CAPABILITIES = [
   // ── Grok (vision + Live Search) ──────────────────────────────────
   { pattern: "*grok*image*",    caps: { imageOutput: true } },
   { pattern: "*grok-code*",     caps: { reasoning: true, thinkingFormat: "openai", contextWindow: 256000 } },
+  // Grok 4.7: 500k context, same envelope as 4.6. Without its own row it fell to the
+  // `*grok-4*` catch-all (256k), and stripHistoryForContext() trims at 80% of that.
+  { pattern: "*grok-4.7*",      caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 500000, maxOutput: 500000 } },
   // Grok 4.6: 500k context, no text output limit (docs.x.ai/developers/grok-4-6)
   { pattern: "*grok-4.6*",      caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 500000, maxOutput: 500000 } },
   // Grok 4.5 (Grok CLI / Grok Build): 500k context per cli-chat-proxy /v1/models
@@ -461,10 +573,11 @@ export const PATTERN_CAPABILITIES = [
   { pattern: "*minimax-m2.7*",  caps: { reasoning: true, thinkingFormat: "minimax", thinkingCanDisable: false, contextWindow: 204800, maxOutput: 131072 } },
   { pattern: "*minimax*",       caps: { reasoning: true, thinkingFormat: "minimax", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 131072 } },
 
-  // ── Xiaomi MiMo (vision, 1M / 262K ctx) ──────────────────────────
-  { pattern: "*mimo*v2.5*",     caps: { vision: true, audioInput: true, videoInput: true, contextWindow: 1048576, maxOutput: 131072 } },
-  { pattern: "*mimo*omni*",     caps: { vision: true, audioInput: true, contextWindow: 262144, maxOutput: 131072 } },
-  { pattern: "*mimo*",          caps: { vision: true, contextWindow: 262144, maxOutput: 131072 } },
+  // ── Xiaomi MiMo (vision + <think>-tag reasoning, always-on, can't disable) ──
+  { pattern: "*mimo*v2.6*",     caps: { vision: true, audioInput: true, videoInput: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 1048576, maxOutput: 131072 } },
+  { pattern: "*mimo*v2.5*",     caps: { vision: true, audioInput: true, videoInput: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 1048576, maxOutput: 131072 } },
+  { pattern: "*mimo*omni*",     caps: { vision: true, audioInput: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 262144, maxOutput: 131072 } },
+  { pattern: "*mimo*",          caps: { vision: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 262144, maxOutput: 131072 } },
 
   // ── Llama (4 = vision/1M; 3.x = text-only/128K) ──────────────────
   { pattern: "*llama-4*",       caps: { vision: true, contextWindow: 1000000 } },

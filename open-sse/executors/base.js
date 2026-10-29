@@ -175,6 +175,8 @@ export class BaseExecutor {
     credentials,
     signal,
     log,
+    timing,
+    requestLogger,
     proxyOptions = null,
   }) {
     const fallbackCount = this.getFallbackCount();
@@ -242,6 +244,12 @@ export class BaseExecutor {
       try {
         const bodyStr = JSON.stringify(transformedBody);
         const fetchT0 = Date.now();
+        requestLogger?.recordTelemetry?.({
+          phase: "fetch_start",
+          attempt: (retryAttemptsByUrl[urlIndex] || 0) + 1,
+          urlIndex,
+          elapsedMs: timing?.requestStartTime ? fetchT0 - timing.requestStartTime : undefined,
+        });
         dbg(
           "FETCH",
           `${this.provider.toUpperCase()} → ${url} | body=${bodyStr.length}B | connectTimeout=${connectTimeoutMs}ms`,
@@ -257,6 +265,14 @@ export class BaseExecutor {
           proxyOptions,
         );
         clearTimeout(connectTimer);
+        if (timing) timing.upstreamHeadersAt ??= Date.now();
+        requestLogger?.recordTelemetry?.({
+          phase: "headers_received",
+          attempt: (retryAttemptsByUrl[urlIndex] || 0) + 1,
+          urlIndex,
+          httpStatus: response.status,
+          elapsedMs: Date.now() - fetchT0,
+        });
 
         const ct = response.headers?.get?.("content-type") || "";
         const cl = response.headers?.get?.("content-length") || "?";

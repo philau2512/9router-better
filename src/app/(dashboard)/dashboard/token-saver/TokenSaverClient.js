@@ -29,6 +29,7 @@ const patchSetting = async (patch) => {
 };
 
 export default function TokenSaverClient() {
+
   const { copied, copy } = useCopyToClipboard();
 
   // Create state hooks
@@ -346,6 +347,37 @@ export default function TokenSaverClient() {
             />
           </div>
         </div>
+        <div className="flex items-center justify-between pt-4 mt-4 border-t border-border gap-4 flex-wrap">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Custom system prompt</p>
+            <p className="text-sm text-text-muted">
+              Appends your own instruction to every request, independently of
+              the savers above
+            </p>
+          </div>
+          <Toggle
+            checked={settings.customPromptEnabled}
+            onChange={() => settings.handleCustomPromptEnabled(!settings.customPromptEnabled)}
+          />
+        </div>
+        {settings.customPromptEnabled && (
+          <div className="pt-3">
+            <textarea
+              id="custom-prompt"
+              aria-label="Custom system prompt"
+              value={settings.customPrompt}
+              onChange={(e) => settings.setCustomPrompt(e.target.value)}
+              onBlur={settings.handleCustomPromptBlur}
+              rows={4}
+              placeholder="e.g. Prefer editing existing files over creating new ones."
+              className="w-full rounded border border-border bg-transparent p-2 text-xs"
+            />
+            <p className="text-xs text-text-muted mt-1">
+              Applied to every provider and model. Sent as-is to upstream; an
+              empty prompt injects nothing.
+            </p>
+          </div>
+        )}
         {/* PXPIPE hidden from UI — experimental, not exposed to users yet */}
         {false && (
           <div className="flex items-center justify-between pt-4 mt-4 border-t border-border gap-4 flex-wrap">

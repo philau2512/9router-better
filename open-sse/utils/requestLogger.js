@@ -242,6 +242,31 @@ function maskSensitiveHeaders(headers) {
   return redactValue(normalizedHeaders);
 }
 
+function sanitizeTelemetryEvent(event = {}) {
+  const allowed = [
+    "phase", "attempt", "urlIndex", "httpStatus", "retryReason",
+    "retryDelayMs", "upstreamBytes", "upstreamChunks", "endReason",
+  ];
+  return {
+    ...Object.fromEntries(
+      allowed.filter((key) => event[key] !== undefined).map((key) => [key, event[key]]),
+    ),
+    elapsedMs: Number.isFinite(event.elapsedMs) ? event.elapsedMs : null,
+  };
+}
+
+function sanitizeTiming(timing) {
+  if (!timing || typeof timing !== "object") return null;
+  const allowed = [
+    "requestParsedAt", "requestReadyAt", "upstreamFetchStartedAt",
+    "upstreamHeadersAt", "codexPeekDoneAt", "upstreamFirstByteAt",
+    "clientFirstChunkAt", "upstreamEofAt",
+  ];
+  return Object.fromEntries(
+    allowed.filter((key) => Number.isFinite(timing[key])).map((key) => [key, timing[key]]),
+  );
+}
+
 // No-op logger when logging is disabled
 function createNoOpLogger() {
   return {
@@ -256,6 +281,7 @@ function createNoOpLogger() {
     logConvertedResponse() {},
     appendConvertedChunk() {},
     logError() {},
+    recordTelemetry() {},
     flush() {
       return Promise.resolve();
     },
@@ -283,6 +309,8 @@ function createBufferedLogger(sourceFormat, targetFormat, model) {
   let providerRes = null;
   let errorObj = null;
   let convertedRes = null;
+  const telemetry = [];
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   let providerChunks = [];
   let openAIChunks = [];
@@ -349,6 +377,8 @@ function createBufferedLogger(sourceFormat, targetFormat, model) {
         writeJsonFile(watchdogPendingPath, "status.json", {
           status: "pending_watchdog",
           elapsedMs: watchdogMs,
+          requestId,
+          telemetry,
           timestamp: new Date().toISOString(),
         });
       } catch (err) {
@@ -451,11 +481,18 @@ function createBufferedLogger(sourceFormat, targetFormat, model) {
       };
     },
 
+    recordTelemetry(event = {}) {
+      telemetry.push({
+        ...sanitizeTelemetryEvent(event),
+        at: new Date().toISOString(),
+      });
+    },
+
     flush() {
       return Promise.resolve();
     },
 
-    async finalize({ durationMs = 0, status = "success", error = null, ttft = null, usage = null } = {}) {
+    async finalize({ durationMs = 0, status = "success", error = null, ttft = null, usage = null, timing = null, endReason = null } = {}) {
       if (isFinalized) return;
       isFinalized = true;
 
@@ -529,6 +566,7 @@ function createBufferedLogger(sourceFormat, targetFormat, model) {
           }
 
           writeJsonFile(targetDir, "metadata.json", {
+            requestId,
             durationMs,
             seconds: sec,
             ttft,
@@ -537,6 +575,9 @@ function createBufferedLogger(sourceFormat, targetFormat, model) {
             targetFormat,
             model,
             usage,
+            timing: sanitizeTiming(timing),
+            endReason,
+          telemetry: [...telemetry],
             timestamp: new Date().toISOString(),
           });
 
@@ -683,11 +724,18 @@ export async function createRequestLogger(sourceFormat, targetFormat, model) {
         });
       },
 
+      recordTelemetry(event = {}) {
+        appendChunk.append("telemetry.jsonl", `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          ...sanitizeTelemetryEvent(event),
+        })}\n`);
+      },
+
       flush() {
         return appendChunk.flush();
       },
 
-      async finalize({ durationMs = 0, status = "success", error = null, ttft = null, usage = null } = {}) {
+      async finalize({ durationMs = 0, status = "success", error = null, ttft = null, usage = null, timing = null, endReason = null } = {}) {
         const sec = Math.round((durationMs || 0) / 1000);
         appendChunk.writeJson("metadata.json", {
           durationMs,
@@ -698,6 +746,8 @@ export async function createRequestLogger(sourceFormat, targetFormat, model) {
           targetFormat,
           model,
           usage,
+          timing: sanitizeTiming(timing),
+          endReason,
           timestamp: new Date().toISOString(),
         });
         return appendChunk.flush();

@@ -45,6 +45,7 @@ import {
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
+import { injectCustomPrompt } from "../rtk/customPrompt.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import {
   compressWithHeadroom,
@@ -182,6 +183,9 @@ export async function handleChatCore({
   cavemanLevel,
   ponytailEnabled,
   ponytailLevel,
+  customPromptEnabled,
+  customPrompt,
+  providerOverrides,
   midStreamResumeEnabled,
   sourceFormatOverride,
   providerThinking,
@@ -247,7 +251,6 @@ export async function handleChatCore({
     credentials.runtimeTransport = useTransport;
   }
   const stripList = getModelStrip(alias, model);
-  const upstreamModel = getModelUpstreamId(alias, model) || model;
 
   // Inject provider-level thinking config override (only if client hasn't set)
   // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
@@ -269,6 +272,9 @@ export async function handleChatCore({
     const _cachedThinking = _replayKey ? getCachedThinking(_replayKey) : null;
     if (_cachedThinking) body = injectThinkingReplay(body, _cachedThinking);
   }
+
+  const upstreamModel = getModelUpstreamId(alias, model, body) || model;
+
 
   const clientRequestedStreaming =
     body.stream === true ||
@@ -322,6 +328,7 @@ export async function handleChatCore({
       clientRawRequest.headers,
     );
   reqLogger.logRawRequest(body);
+  reqLogger.recordTelemetry?.({ phase: "request_ready", elapsedMs: Date.now() - requestStartTime });
   log?.debug?.(
     "FORMAT",
     `${sourceFormat} → ${targetFormat} | stream=${stream}`,
@@ -420,6 +427,8 @@ export async function handleChatCore({
         durationMs: Date.now() - requestStartTime,
         status: "error",
         error: new Error(errMsg),
+        timing,
+        endReason: "translation_error",
       });
       return createErrorResult(
         HTTP_STATUS.BAD_REQUEST,
@@ -575,6 +584,10 @@ export async function handleChatCore({
     log?.debug?.("PONYTAIL", `${ponytailLevel} | ${finalFormat}`);
   }
 
+  // Custom prompt: user-authored instruction, independent of the savers above
+  if (customPromptEnabled && injectCustomPrompt(translatedBody, finalFormat, customPrompt)) {
+    log?.debug?.("CUSTOMPROMPT", `${customPrompt.trim().length} chars | ${finalFormat}`);
+  }
   const executor = getExecutor(provider);
   stripContinuityFields(translatedBody);
   trackPendingRequest(model, provider, connectionId, true);
@@ -689,11 +702,13 @@ export async function handleChatCore({
       emitObjects: wantKiroObjects,
       onProfileArnDiscovered,
       timing,
+      requestLogger: reqLogger,
     });
   try {
     if (timing && !timing.upstreamFetchStartedAt) {
       timing.upstreamFetchStartedAt = Date.now();
     }
+    reqLogger.recordTelemetry?.({ phase: "executor_start", elapsedMs: Date.now() - requestStartTime });
     const result = await runExecutor();
     providerResponse = result.response;
     providerUrl = result.url;
@@ -741,6 +756,8 @@ export async function handleChatCore({
       durationMs: Date.now() - requestStartTime,
       status: "error",
       error,
+      timing,
+      endReason: error.name === "AbortError" ? "abort" : error.name,
     });
     if (error.name === "AbortError") {
       streamController.handleError(error);

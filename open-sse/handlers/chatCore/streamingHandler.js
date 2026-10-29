@@ -97,6 +97,9 @@ function buildTransformStream({
     return createTranslateStream(targetFormat, sourceFormat);
   }
 
+  // The passthrough path has no format translation, so the fingerprint's tool
+  // rename map (read -> read_client) has to be handed over explicitly —
+  // otherwise the client receives a call to a tool it never declared (#4986).
   return createPassthroughStreamWithLogger(
     provider,
     reqLogger,
@@ -108,6 +111,7 @@ function buildTransformStream({
     streamStateTracker,
     targetModelAlias,
     requestStartTime,
+    toolNameMap,
   );
 }
 
@@ -214,6 +218,8 @@ export async function handleStreamingResponse({
       durationMs: Date.now() - requestStartTime,
       status: "error",
       error: new Error(message || "Stream aborted"),
+      timing,
+      endReason: message || "stream_aborted",
     });
     return isResponsesPassthrough
       ? buildAbortedResponsesTerminalBytes(message)
@@ -376,9 +382,15 @@ export function buildOnStreamComplete({
       ttft: latency.ttft,
       status: "success",
       usage,
+      timing,
     });
 
     if (timing) {
+      reqLogger?.recordTelemetry?.({
+        phase: "stream_complete",
+        elapsedMs: total,
+        endReason: "eof",
+      });
       log.ttft(`${provider.toUpperCase()} | ${log.hlModel(model)}`, {
         total,
         ttft: latency.ttft,

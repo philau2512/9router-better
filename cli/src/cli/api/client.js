@@ -574,4 +574,7 @@ module.exports = {
   updateProviderNode,
   deleteProviderNode,
   validateProviderNode,
+
+  // Token helper
+  getCliToken,
 };
