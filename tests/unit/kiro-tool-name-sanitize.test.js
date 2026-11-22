@@ -104,7 +104,7 @@ describe("buildKiroToolNameMap", () => {
 });
 
 describe("request round-trip — payload sanitize + map attach", () => {
-  const mcpName = "mcp__github__create_issue";
+  const mcpName = "mcp.github:create_issue";
 
   it("[claude route] sanitizes MCP tool def, keeps valid tool, attaches map", async () => {
     const { claudeToKiroRequest } = await import(

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
 import { Badge, Toggle, Tooltip } from "@/shared/components";
@@ -10,6 +11,8 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
   const [showProxyDropdown, setShowProxyDropdown] = useState(false);
   const [updatingProxy, setUpdatingProxy] = useState(false);
   const proxyDropdownRef = useRef(null);
+  const proxyBtnRef = useRef(null);
+  const [proxyDropdownStyle, setProxyDropdownStyle] = useState(null);
 
   const proxyPoolMap = new Map((proxyPools || []).map((pool) => [pool.id, pool]));
   const boundProxyPoolId = connection.providerSpecificData?.proxyPoolId || null;
@@ -23,9 +26,18 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
       : hasLegacyProxy
         ? `Legacy: ${connection.providerSpecificData?.connectionProxyUrl}`
         : "";
-  const autoPingTooltip = autoPing?.provider === "codex"
-    ? "Auto-starts the next 5h Codex window after reset by sending a tiny gpt-5.5 request. Consumes a small amount of quota."
-    : "When your 5h quota runs out, auto-sends a request the moment it resets so a new window starts right away.";
+  const autoPingTooltip = (() => {
+    if (!autoPing) return "";
+    const activeModes = [];
+    if (autoPing.reactiveOn) activeModes.push("On reset");
+    if (autoPing.scheduleOn) activeModes.push(`Scheduled (${autoPing.scheduleSummary || "active"})`);
+    if (activeModes.length > 0) {
+      return `Auto-ping active: ${activeModes.join(" + ")}. Click to configure.`;
+    }
+    return autoPing.provider === "codex"
+      ? "Auto-starts the next 5h Codex window after reset or on schedule. Click to configure."
+      : "Auto-starts a new window on quota reset or fixed schedule. Click to configure.";
+  })();
 
   let maskedProxyUrl = "";
   if (boundProxyPool?.proxyUrl || connection.providerSpecificData?.connectionProxyUrl) {
@@ -47,16 +59,50 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
     proxyBadgeVariant = "error";
   }
 
-  // Close dropdown when clicking outside
+  // Render via portal + fixed positioning so ancestor overflow (scrollable
+  // connections list) can't clip the dropdown
+  const toggleProxyDropdown = () => {
+    if (showProxyDropdown) {
+      setShowProxyDropdown(false);
+      return;
+    }
+    const rect = proxyBtnRef.current?.getBoundingClientRect();
+    if (!rect) {
+      setShowProxyDropdown(true);
+      return;
+    }
+    const estimatedHeight = ((proxyPools?.length || 0) + 1) * 34 + 8;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const flipUp = spaceBelow < estimatedHeight && rect.top > spaceBelow;
+    setProxyDropdownStyle({
+      position: "fixed",
+      right: window.innerWidth - rect.right,
+      ...(flipUp
+        ? { bottom: window.innerHeight - rect.top + 4, maxHeight: Math.max(rect.top - 8, 120) }
+        : { top: rect.bottom + 4, maxHeight: Math.max(spaceBelow - 8, 120) }),
+    });
+    setShowProxyDropdown(true);
+  };
+
+  // Close dropdown when clicking outside, scrolling, or resizing
   useEffect(() => {
     if (!showProxyDropdown) return;
-    const handler = (e) => {
-      if (proxyDropdownRef.current && !proxyDropdownRef.current.contains(e.target)) {
-        setShowProxyDropdown(false);
-      }
+    const handleClick = (e) => {
+      if (
+        proxyDropdownRef.current?.contains(e.target) ||
+        proxyBtnRef.current?.contains(e.target)
+      ) return;
+      setShowProxyDropdown(false);
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const close = () => setShowProxyDropdown(false);
+    document.addEventListener("mousedown", handleClick);
+    window.addEventListener("resize", close);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      window.removeEventListener("resize", close);
+      document.removeEventListener("scroll", close, true);
+    };
   }, [showProxyDropdown]);
 
   const handleSelectProxy = async (poolId) => {
@@ -69,162 +115,106 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
     }
   };
 
-  const rowAuthType = connection.authType || (isOAuth ? "oauth" : "apikey");
-  const isOAuthConnection = rowAuthType === "oauth";
-  const isCookieConnection = rowAuthType === "cookie";
-  const authIcon = isCookieConnection ? "cookie" : isOAuthConnection ? "lock" : "key";
-  const authLabel = isOAuthConnection ? "OAuth" : isCookieConnection ? "Cookie" : "API Key";
-  const codexPlan = connection.provider === "codex" && typeof connection.providerSpecificData?.chatgptPlanType === "string"
-    ? connection.providerSpecificData.chatgptPlanType.trim()
-    : "";
-  const displayName = connection.name?.trim()
-    || connection.email?.trim()
-    || connection.displayName?.trim()
-    || (isOAuthConnection ? "OAuth Account" : isCookieConnection ? "Cookie Account" : "API Key");
-  const secondaryDisplayName = connection.name?.trim() && connection.email?.trim() && connection.name.trim() !== connection.email.trim()
-    ? connection.email.trim()
-    : connection.name?.trim() && connection.displayName?.trim() && connection.name.trim() !== connection.displayName.trim()
-      ? connection.displayName.trim()
-      : null;
-
-  // Use useState + useEffect for impure Date.now() to avoid calling during render
-  const [isCooldown, setIsCooldown] = useState(false);
-
-  // Get earliest model lock timestamp (useEffect handles the Date.now() comparison)
-  const modelLockUntil = Object.entries(connection)
-    .filter(([k]) => k.startsWith("modelLock_"))
-    .map(([, v]) => v)
-    .filter(v => !!v)
-    .sort()[0] || null;
-
-  useEffect(() => {
-    const checkCooldown = () => {
-      const until = Object.entries(connection)
-        .filter(([k]) => k.startsWith("modelLock_"))
-        .map(([, v]) => v)
-        .filter(v => v && new Date(v).getTime() > Date.now())
-        .sort()[0] || null;
-      setIsCooldown(!!until);
-    };
-
-    checkCooldown();
-    const interval = modelLockUntil ? setInterval(checkCooldown, 1000) : null;
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [modelLockUntil, connection]);
-
-  // Determine effective status (override unavailable if cooldown expired)
-  const effectiveStatus = (connection.testStatus === "unavailable" && !isCooldown)
-    ? "active"  // Cooldown expired u2192 treat as active
-    : connection.testStatus;
-
-  const getStatusVariant = () => getConnectionStatusVariant(connection.isActive, effectiveStatus);
-
-  const getOneByOneVariant = () => {
-    if (!oneByOneStatus) return "default";
-    if (oneByOneStatus.state === "success") return "success";
-    if (oneByOneStatus.state === "failed") return "error";
-    if (oneByOneStatus.state === "testing") return "primary";
-    return "default";
-  };
-
-  const getOneByOneLabel = () => {
-    if (!oneByOneStatus) return null;
-    if (oneByOneStatus.state === "queued") return "queued";
-    if (oneByOneStatus.state === "testing") return "testing";
-    if (oneByOneStatus.state === "success") return "success";
-    if (oneByOneStatus.state === "failed") return oneByOneStatus.error ? `failed: ${oneByOneStatus.error}` : "failed";
-    return null;
-  };
+  const statusVariant = getConnectionStatusVariant(connection.isActive, connection.testStatus);
+  const statusLabel = connection.isActive === false
+    ? "Disabled"
+    : connection.testStatus === "active" || connection.testStatus === "success"
+      ? "Active"
+      : connection.testStatus === "error"
+        ? "Error"
+        : connection.testStatus === "expired"
+          ? "Expired"
+          : connection.testStatus === "unavailable"
+            ? "Unavailable"
+            : "Unknown";
 
   return (
-    <div className={`group flex min-w-0 flex-col gap-3 rounded-lg p-2 transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02] sm:flex-row sm:items-center sm:justify-between ${connection.isActive === false ? "opacity-60" : ""}`}>
-      <div className="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
-        {/* Priority arrows */}
-        <div className="flex shrink-0 flex-col">
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3.5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-1">
           <button
             onClick={onMoveUp}
             disabled={isFirst}
-            className={`p-0.5 rounded ${isFirst ? "text-text-muted/30 cursor-not-allowed" : "hover:bg-sidebar text-text-muted hover:text-primary"}`}
+            className="flex h-5 w-5 items-center justify-center rounded text-text-muted hover:bg-black/5 hover:text-text-main disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/5"
+            title="Move up"
           >
-            <span className="material-symbols-outlined text-sm">keyboard_arrow_up</span>
+            <span className="material-symbols-outlined text-[16px]">expand_less</span>
           </button>
           <button
             onClick={onMoveDown}
             disabled={isLast}
-            className={`p-0.5 rounded ${isLast ? "text-text-muted/30 cursor-not-allowed" : "hover:bg-sidebar text-text-muted hover:text-primary"}`}
+            className="flex h-5 w-5 items-center justify-center rounded text-text-muted hover:bg-black/5 hover:text-text-main disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/5"
+            title="Move down"
           >
-            <span className="material-symbols-outlined text-sm">keyboard_arrow_down</span>
+            <span className="material-symbols-outlined text-[16px]">expand_more</span>
           </button>
         </div>
-        <span className="material-symbols-outlined shrink-0 text-base text-text-muted">
-          {authIcon}
-        </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate">{displayName}</p>
-          {secondaryDisplayName && (
-            <p className="text-xs text-text-muted truncate">{secondaryDisplayName}</p>
-          )}
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
-            <Badge variant={getStatusVariant()} size="sm" dot>
-              {connection.isActive === false ? "disabled" : (effectiveStatus || "Unknown")}
-            </Badge>
-            <Badge variant="default" size="sm">
-              {authLabel}
-            </Badge>
-            {codexPlan && (
-              <Badge variant="primary" size="sm" className="capitalize">
-                {codexPlan}
-              </Badge>
-            )}
-            {hasAnyProxy && (
-              <Badge variant={proxyBadgeVariant} size="sm">
-                Proxy
-              </Badge>
-            )}
-            {isCooldown && connection.isActive !== false && <CooldownTimer until={modelLockUntil} />}
-            {connection.lastError && connection.isActive !== false && (
-              <span className="max-w-full truncate text-xs text-red-500 sm:max-w-[300px]" title={connection.lastError}>
-                {connection.lastError}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-text-main truncate">{connection.name}</span>
+            <Badge variant={statusVariant}>{statusLabel}</Badge>
+            {oneByOneStatus?.state === "testing" && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-primary">
+                <span className="material-symbols-outlined animate-spin text-[13px]">progress_activity</span>
+                <span>Testing...</span>
               </span>
             )}
-            <span className="text-xs text-text-muted">#{connection.priority}</span>
-            {connection.globalPriority && (
-              <span className="text-xs text-text-muted">Auto: {connection.globalPriority}</span>
+            {oneByOneStatus?.state === "success" && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-green-500">
+                <span className="material-symbols-outlined text-[13px]">check_circle</span>
+                <span>OK</span>
+              </span>
             )}
-            {getOneByOneLabel() && (
-              <Badge variant={getOneByOneVariant()} size="sm">
-                {getOneByOneLabel()}
+            {oneByOneStatus?.state === "error" && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-red-500" title={oneByOneStatus.error}>
+                <span className="material-symbols-outlined text-[13px]">error</span>
+                <span className="truncate max-w-[200px]">{oneByOneStatus.error || "Failed"}</span>
+              </span>
+            )}
+            {connection.modelLockUntil && (
+              <CooldownTimer until={connection.modelLockUntil} />
+            )}
+            {connection.providerSpecificData?.chatgptPlanType && (
+              <Badge variant="default">{connection.providerSpecificData.chatgptPlanType}</Badge>
+            )}
+            {hasAnyProxy && (
+              <Badge
+                variant={proxyBadgeVariant}
+                title={maskedProxyUrl ? `${proxyDisplayText} (${maskedProxyUrl})${noProxyText ? ` | Bypass: ${noProxyText}` : ""}` : proxyDisplayText}
+              >
+                <span className="material-symbols-outlined mr-0.5 text-[11px]">lan</span>
+                {proxyDisplayText}
               </Badge>
             )}
           </div>
-          {hasAnyProxy && (
-            <div className="mt-1 flex items-center gap-2 flex-wrap">
-              <span className="max-w-full truncate text-[11px] text-text-muted sm:max-w-[420px]" title={proxyDisplayText}>
-                {proxyDisplayText}
-              </span>
-              {maskedProxyUrl && (
-                <code className="max-w-full truncate rounded bg-black/5 px-1 py-0.5 font-mono text-[10px] text-text-muted dark:bg-white/5 sm:max-w-[260px]">
-                  {maskedProxyUrl}
-                </code>
-              )}
-              {noProxyText && (
-                <span className="max-w-full truncate text-[11px] text-text-muted sm:max-w-[320px]" title={noProxyText}>
-                  no_proxy: {noProxyText}
-                </span>
-              )}
-            </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-text-muted">
+            {connection.displayName && connection.displayName !== connection.name && (
+              <span>{connection.displayName}</span>
+            )}
+            {connection.email && (
+              <span>{connection.email}</span>
+            )}
+            <span className="font-mono text-[10px]">P{connection.priority ?? 0}</span>
+            {connection.globalPriority !== undefined && connection.globalPriority !== 0 && (
+              <span className="font-mono text-[10px] text-primary">GP{connection.globalPriority}</span>
+            )}
+          </div>
+          {connection.lastError && (
+            <p className="mt-1 text-xs text-red-400 truncate max-w-md" title={connection.lastError}>
+              {connection.lastError}
+            </p>
           )}
         </div>
       </div>
-      <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
+
+      <div className="flex items-center justify-between gap-3 sm:justify-end">
         <div className="grid flex-1 grid-cols-3 gap-1 sm:flex sm:flex-none">
           {/* Proxy button with inline dropdown */}
           {(proxyPools || []).length > 0 && (
-            <div className="relative" ref={proxyDropdownRef}>
+            <div>
               <button
-                onClick={() => setShowProxyDropdown((v) => !v)}
+                ref={proxyBtnRef}
+                onClick={toggleProxyDropdown}
                 className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${hasAnyProxy ? "text-primary" : "text-text-muted hover:text-primary"}`}
                 disabled={updatingProxy}
               >
@@ -233,8 +223,12 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
                 </span>
                 <span className="text-[10px] leading-tight">Proxy</span>
               </button>
-              {showProxyDropdown && (
-                <div className="absolute right-0 top-full z-50 mt-1 max-w-[78vw] min-w-[160px] rounded-lg border border-border bg-bg py-1 shadow-lg">
+              {showProxyDropdown && createPortal(
+                <div
+                  ref={proxyDropdownRef}
+                  style={proxyDropdownStyle}
+                  className="z-50 max-w-[78vw] min-w-[160px] overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg"
+                >
                   <button
                     onClick={() => handleSelectProxy("__none__")}
                     className={`w-full text-left px-3 py-1.5 text-sm hover:bg-black/5 dark:hover:bg-white/5 ${!boundProxyPoolId ? "text-primary font-medium" : "text-text-main"}`}
@@ -250,15 +244,16 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
                       {pool.name}
                     </button>
                   ))}
-                </div>
+                </div>,
+                document.body
               )}
             </div>
           )}
           {autoPing && (
             <Tooltip text={autoPingTooltip}>
               <button
-                onClick={() => autoPing.onToggle(!autoPing.on)}
-                className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPing.on ? "text-primary" : "text-text-muted hover:text-primary"}`}
+                onClick={autoPing.onConfigure}
+                className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPing.isActive ? "text-primary" : "text-text-muted hover:text-primary"}`}
               >
                 <span className="material-symbols-outlined text-[18px]">bolt</span>
                 <span className="text-[10px] leading-tight">Auto-ping</span>
@@ -323,8 +318,11 @@ ConnectionRow.propTypes = {
     error: PropTypes.string,
   }),
   autoPing: PropTypes.shape({
-    on: PropTypes.bool,
-    onToggle: PropTypes.func,
+    isActive: PropTypes.bool,
     provider: PropTypes.string,
+    reactiveOn: PropTypes.bool,
+    scheduleOn: PropTypes.bool,
+    scheduleSummary: PropTypes.string,
+    onConfigure: PropTypes.func,
   }),
 };

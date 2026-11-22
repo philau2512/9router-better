@@ -18,6 +18,8 @@ import {
   refreshTraeToken,
   refreshZedToken,
   refreshWindsurfToken,
+  refreshMiniMaxCodeToken,
+  refreshNousToken,
 } from "./tokenRefresh/providers.js";
 import { parseVertexSaJson, refreshVertexToken } from "./refresh-vertex.js";
 
@@ -257,6 +259,11 @@ export async function refreshTokenByProvider(provider, credentials, log) {
       return refreshZedToken();
     case "windsurf":
       return refreshWindsurfToken(credentials, refreshLog);
+    case "minimax-code":
+    case "minimax-code-global":
+      return refreshMiniMaxCodeToken(provider, credentials.refreshToken, refreshLog);
+    case "nous":
+      return refreshNousToken(credentials.refreshToken, refreshLog);
     case "vertex":
     case "vertex-partner": {
       const saJson = parseVertexSaJson(credentials.apiKey);

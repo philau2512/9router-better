@@ -104,7 +104,7 @@ export function ApiKeyModals({
               Save this key now!
             </p>
             <p className="text-sm text-yellow-700 dark:text-yellow-300">
-              This is the only time you will see this key. Store it securely.
+              Store this key securely. You can view or copy it later from the API Keys list.
             </p>
           </div>
           <div className="flex gap-2">

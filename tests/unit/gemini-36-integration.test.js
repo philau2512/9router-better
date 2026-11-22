@@ -67,6 +67,26 @@ describe("Gemini Cloud Code endpoint isolation", () => {
     ]);
     removeConnection(connectionId);
   });
+
+  it("falls back to deterministic hashed project ID and caches it when discovery fails", async () => {
+    const connectionId = "fallback-test-conn";
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      text: async () => "Quota exhausted",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pid1 = await getProjectIdForConnection(connectionId, "token", "antigravity");
+    expect(pid1).toMatch(/^[a-z]+-[a-z]+-[a-f0-9]{5}$/);
+
+    // Second call should return cached value without fetching again
+    const pid2 = await getProjectIdForConnection(connectionId, "token", "antigravity");
+    expect(pid2).toBe(pid1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    removeConnection(connectionId);
+  });
 });
 
 describe("Gemini 3.6 Antigravity tiers", () => {

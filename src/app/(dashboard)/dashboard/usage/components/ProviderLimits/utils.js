@@ -84,6 +84,12 @@ export function getRemainingPercentage(quota) {
   // Free / unknown allotment: empty bar (CLIProxyAPI "Used --"), not 100% full.
   if (quota?.unknown === true) return 0;
 
+  if (quota?.percentage !== undefined) {
+    // Providers may report the used share; the UI renders the remaining one.
+    const value = quota.percentageIsUsed === true ? 100 - quota.percentage : quota.percentage;
+    return Math.max(0, Math.round(value));
+  }
+
   if (quota?.remaining !== undefined) {
     return Math.max(0, Math.round(quota.remaining));
   }
@@ -181,10 +187,12 @@ export function parseQuotaData(provider, data) {
       case "antigravity":
         if (data.quotas) {
           const entries = Object.entries(data.quotas);
+          const weeklyKeys = new Set(["gemini_weekly", "claude_gpt_weekly"]);
           const geminiModels = entries.filter(([k]) => k.startsWith("gemini-") && !k.includes("image"));
           const claudeModels = entries.filter(([k]) => k.startsWith("claude-"));
           const imageModels = entries.filter(([k]) => k.includes("image"));
-          const otherModels = entries.filter(([k]) => !k.startsWith("gemini-") && !k.startsWith("claude-") && !k.includes("image"));
+          const weeklyModels = entries.filter(([k]) => weeklyKeys.has(k));
+          const otherModels = entries.filter(([k]) => !k.startsWith("gemini-") && !k.startsWith("claude-") && !k.includes("image") && !weeklyKeys.has(k));
 
           if (geminiModels.length > 0) {
             const rep = geminiModels.reduce((min, cur) =>
@@ -213,6 +221,17 @@ export function parseQuotaData(provider, data) {
               remainingPercentage: rep.remainingPercentage,
             });
           }
+
+          weeklyModels.forEach(([modelKey, quota]) => {
+            normalizedQuotas.push({
+              name: quota.displayName || modelKey,
+              modelKey,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              remainingPercentage: quota.remainingPercentage,
+            });
+          });
 
           imageModels.forEach(([modelKey, quota]) => {
             normalizedQuotas.push({
@@ -368,6 +387,8 @@ export function parseQuotaData(provider, data) {
               total: quota.total || 0,
               resetAt: quota.resetAt || null,
               remainingPercentage: quota.remainingPercentage,
+              isCreditBalance: quota.isCreditBalance ?? true,
+              currency: quota.currency || (name.includes("(") ? name.slice(name.indexOf("(") + 1, name.indexOf(")")) : "USD"),
             });
           });
         }
@@ -386,6 +407,8 @@ export function parseQuotaData(provider, data) {
         }
         break;
       case "ollama":
+        // Session (5h) / Weekly (7d) / Monthly usage % from ollama.com/api/balance (or /api/usage).
+        // remainingPercentage only — no absolute remaining (UI treats remaining as %).
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([name, quota]) => {
             normalizedQuotas.push({
@@ -394,6 +417,10 @@ export function parseQuotaData(provider, data) {
               total: quota.total || 0,
               resetAt: quota.resetAt || null,
               remainingPercentage: quota.remainingPercentage,
+              isCreditBalance: quota.isCreditBalance,
+              currency: quota.currency,
+              unit: quota.unit,
+              unlimited: quota.unlimited,
             });
           });
         }
@@ -415,15 +442,41 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
-      default:
-        // Generic fallback for unknown providers
+      case "minimax-code":
+      case "minimax-code-global":
+        // Service already returns dashboard-shaped rows: a credits balance
+        // (isCreditBalance → 💰 with the amount as total) plus M Plan rate
+        // windows as 0-100 percent rows. Pass through, preserving extras.
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([name, quota]) => {
             normalizedQuotas.push({
               name,
               used: quota.used || 0,
               total: quota.total || 0,
+              remaining: quota.remaining,
+              remainingPercentage: quota.remainingPercentage,
               resetAt: quota.resetAt || null,
+              message: quota.message,
+              isCreditBalance: quota.isCreditBalance,
+              currency: quota.currency,
+            });
+          });
+        }
+        break;
+
+      default:
+        // Generic fallback for unknown providers
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name: quota.name || name,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              percentage: quota.percentage,
+              colorPercentage: quota.colorPercentage,
+              percentageIsUsed: quota.percentageIsUsed === true,
+              resetAt: quota.resetAt || null,
+              emptyMessage: quota.emptyMessage || null,
             });
           });
         }

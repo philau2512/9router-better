@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 

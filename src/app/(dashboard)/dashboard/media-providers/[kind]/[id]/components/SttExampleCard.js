@@ -17,12 +17,17 @@ export function SttExampleCard({ providerId }) {
   const [selectedModel, setSelectedModel] = useState(builtinSttModels[0]?.id ?? "");
   const selectedModelObj = sttModels.find((m) => m.id === selectedModel);
   const allowedParams = Array.isArray(selectedModelObj?.params) ? selectedModelObj.params : [];
+  const responseFormats = selectedModelObj?.responseFormats || ["json", "text", "srt", "verbose_json", "vtt"];
 
   const [audioFile, setAudioFile] = useState(null);
   const [language, setLanguage] = useState("");
   const [prompt, setPrompt] = useState("");
   const [responseFormat, setResponseFormat] = useState("json");
   const [temperature, setTemperature] = useState("");
+  const [granularity, setGranularity] = useState("");
+  const [tagAudioEvents, setTagAudioEvents] = useState(false);
+  const [diarize, setDiarize] = useState(false);
+  const [numSpeakers, setNumSpeakers] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [useTunnel, setUseTunnel] = useState(false);
   const [localEndpoint, setLocalEndpoint] = useState(() => typeof window !== "undefined" ? window.location.origin : "");
@@ -67,7 +72,7 @@ export function SttExampleCard({ providerId }) {
   const curlSnippet = `curl -X POST ${endpoint}/v1/audio/transcriptions \\
   -H "Authorization: Bearer ${apiKey || "YOUR_KEY"}" \\
   -F "file=@${audioFile?.name || "audio.mp3"}" \\
-  -F "model=${modelFull}"${allowedParams.includes("language") && language ? ` \\\n  -F "language=${language}"` : ""}${allowedParams.includes("response_format") ? ` \\\n  -F "response_format=${responseFormat}"` : ""}${allowedParams.includes("temperature") && temperature ? ` \\\n  -F "temperature=${temperature}"` : ""}${allowedParams.includes("prompt") && prompt ? ` \\\n  -F "prompt=${prompt}"` : ""}`;
+  -F "model=${modelFull}"${allowedParams.includes("language") && language ? ` \\\n  -F "language=${language}"` : ""}${allowedParams.includes("response_format") ? ` \\\n  -F "response_format=${responseFormat}"` : ""}${allowedParams.includes("temperature") && temperature ? ` \\\n  -F "temperature=${temperature}"` : ""}${allowedParams.includes("prompt") && prompt ? ` \\\n  -F "prompt=${prompt}"` : ""}${allowedParams.includes("timestamps_granularity") && granularity ? ` \\\n  -F "timestamps_granularity=${granularity}"` : ""}${allowedParams.includes("tag_audio_events") && tagAudioEvents ? ` \\\n  -F "tag_audio_events=true"` : ""}${allowedParams.includes("diarize") && diarize ? ` \\\n  -F "diarize=true"` : ""}${allowedParams.includes("num_speakers") && !diarize && numSpeakers ? ` \\\n  -F "num_speakers=${numSpeakers}"` : ""}`;
 
   async function handleRun() {
     if (!audioFile || !modelFull) return;
@@ -83,6 +88,18 @@ export function SttExampleCard({ providerId }) {
       if (allowedParams.includes("response_format")) fd.append("response_format", responseFormat);
       if (allowedParams.includes("temperature") && temperature) fd.append("temperature", temperature);
       if (allowedParams.includes("prompt") && prompt) fd.append("prompt", prompt);
+      if (allowedParams.includes("timestamps_granularity") && granularity) {
+        fd.append("timestamps_granularity", granularity);
+      }
+      if (allowedParams.includes("tag_audio_events") && tagAudioEvents) {
+        fd.append("tag_audio_events", "true");
+      }
+      // diarize and num_speakers are mutually exclusive upstream — only one goes out.
+      if (allowedParams.includes("diarize") && diarize) {
+        fd.append("diarize", "true");
+      } else if (allowedParams.includes("num_speakers") && numSpeakers) {
+        fd.append("num_speakers", numSpeakers);
+      }
 
       const headers = {};
       if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
@@ -226,11 +243,7 @@ export function SttExampleCard({ providerId }) {
               onChange={(e) => setResponseFormat(e.target.value)}
               className="w-full px-3 py-1.5 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
             >
-              <option value="json">json</option>
-              <option value="text">text</option>
-              <option value="srt">srt</option>
-              <option value="verbose_json">verbose_json</option>
-              <option value="vtt">vtt</option>
+              {responseFormats.map((format) => <option key={format} value={format}>{format}</option>)}
             </select>
           </Row>
         )}

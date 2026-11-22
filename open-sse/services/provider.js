@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { PROVIDERS } from "../config/providers.js";
 import REGISTRY from "../providers/registry/index.js";
 import { buildClineHeaders } from "../../src/shared/utils/clineAuth.js";

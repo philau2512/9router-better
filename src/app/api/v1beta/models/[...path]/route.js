@@ -5,6 +5,7 @@ import {
 } from "@/app/api/cors.js";
 import { handleChat } from "@/sse/handlers/chat.js";
 import { initTranslators } from "open-sse/translator/index.js";
+import { getKeyAccessContext, enforceKeyAccessResolved } from "@/sse/services/keyAccess.js";
 
 let initialized = false;
 // Gemini model id charset — blocks path traversal characters in model strings.

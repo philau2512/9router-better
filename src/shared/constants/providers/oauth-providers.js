@@ -7,6 +7,30 @@ import { RISK_NOTICE, THINKING_CONFIG } from "./thinking-config.js";
 
 // OAuth Providers
 export const OAUTH_PROVIDERS = {
+  "minimax-code": {
+    id: "minimax-code",
+    alias: "mm",
+    name: "MiniMax Code",
+    icon: "smart_toy",
+    color: "#FF4D4F",
+    textIcon: "MM",
+    website: "https://agent.minimax.cn",
+    category: "oauth",
+    authModes: ["oauth"],
+    hasOAuth: true,
+  },
+  "minimax-code-global": {
+    id: "minimax-code-global",
+    alias: "mmg",
+    name: "MiniMax Code (Global)",
+    icon: "smart_toy",
+    color: "#FF4D4F",
+    textIcon: "MM",
+    website: "https://agent.minimax.io",
+    category: "oauth",
+    authModes: ["oauth"],
+    hasOAuth: true,
+  },
   claude: {
     id: "claude",
     alias: "cc",

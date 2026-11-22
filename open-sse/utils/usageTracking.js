@@ -477,13 +477,14 @@ export function logUsage(
 ) {
   if (!usage || typeof usage !== "object") return;
 
+  const canonical = canonicalizeUsage(usage) || usage;
   const p = provider?.toUpperCase() || "UNKNOWN";
 
-  // Support both formats:
-  // - OpenAI: prompt_tokens, completion_tokens
-  // - Claude: input_tokens, output_tokens
-  const inTokens = usage?.prompt_tokens || usage?.input_tokens || 0;
-  const outTokens = usage?.completion_tokens || usage?.output_tokens || 0;
+  // Support both formats (canonical prompt_tokens includes cached + cache creation tokens)
+  const inTokens =
+    canonical?.prompt_tokens ?? (usage?.prompt_tokens || usage?.input_tokens || 0);
+  const outTokens =
+    canonical?.completion_tokens ?? (usage?.completion_tokens || usage?.output_tokens || 0);
   const accountPrefix = connectionId
     ? connectionId.slice(0, 8) + "..."
     : "unknown";
@@ -491,14 +492,15 @@ export function logUsage(
   let msg = `[${getTimeString()}] 📊 ${COLORS.green}[USAGE] ${p} | in=${inTokens} | out=${outTokens} | account=${accountPrefix}${COLORS.reset}`;
 
   // Add estimated flag if present
-  if (usage.estimated) {
+  if (usage.estimated || canonical.estimated) {
     msg += ` ${COLORS.yellow}(estimated)${COLORS.reset}`;
   }
 
   // Add cache info if present (unified from different formats)
   const cacheRead =
-    usage.cache_read_input_tokens ||
-    usage.cached_tokens ||
+    canonical?.cached_tokens ??
+    usage.cache_read_input_tokens ??
+    usage.cached_tokens ??
     usage.prompt_tokens_details?.cached_tokens;
   if (cacheRead) {
     const cacheReadPercent =
@@ -508,10 +510,12 @@ export function logUsage(
     msg += ` | cache_read=${cacheRead} (${cacheReadPercent}%)`;
   }
 
-  const cacheCreation = usage.cache_creation_input_tokens;
+  const cacheCreation =
+    canonical?.cache_creation_input_tokens ?? usage.cache_creation_input_tokens;
   if (cacheCreation) msg += ` | cache_create=${cacheCreation}`;
 
-  const reasoning = usage.reasoning_tokens;
+  const reasoning =
+    canonical?.reasoning_tokens ?? usage.reasoning_tokens;
   if (reasoning) msg += ` | reasoning=${reasoning}`;
 
   console.log(msg);

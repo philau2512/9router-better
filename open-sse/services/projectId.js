@@ -12,6 +12,7 @@ import {
   LOAD_CODE_ASSIST_HEADERS,
   LOAD_CODE_ASSIST_METADATA,
 } from "../config/appConstants.js";
+import { generateProjectId } from "../translator/helpers/geminiHelper.js";
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 // connectionId -> { projectId: string, fetchedAt: number }
@@ -87,11 +88,12 @@ startCacheCleanup();
 
 /**
  * Get the Project ID for a connection, with caching.
- * Returns null on failure (callers should fall back to random generation).
+ * Returns real project ID or deterministic hash fallback on failure.
  *
  * @param {string} connectionId - The connection identifier for cache keying
  * @param {string} accessToken  - Valid OAuth access token
- * @returns {Promise<string|null>} Real project ID or null
+ * @param {string} provider     - Provider name
+ * @returns {Promise<string|null>} Real project ID or fallback
  */
 export async function getProjectIdForConnection(
   connectionId,
@@ -121,14 +123,19 @@ export async function getProjectIdForConnection(
         projectIdCache.set(connectionId, { projectId, fetchedAt: Date.now() });
         return projectId;
       }
+      const fallbackProjectId = generateProjectId(connectionId);
       console.warn(
-        "[ProjectId] could not fetch projectId for connection",
-        connectionId.slice(0, 8),
+        `[ProjectId] could not fetch real projectId for connection ${connectionId.slice(0, 8)}, using fallback: ${fallbackProjectId}`,
       );
-      return null;
+      projectIdCache.set(connectionId, { projectId: fallbackProjectId, fetchedAt: Date.now() });
+      return fallbackProjectId;
     } catch (error) {
-      console.warn(`[ProjectId] Error fetching project ID: ${error.message}`);
-      return null;
+      const fallbackProjectId = generateProjectId(connectionId);
+      console.warn(
+        `[ProjectId] Error fetching project ID: ${error.message}, using fallback: ${fallbackProjectId}`,
+      );
+      projectIdCache.set(connectionId, { projectId: fallbackProjectId, fetchedAt: Date.now() });
+      return fallbackProjectId;
     } finally {
       pendingFetches.delete(connectionId);
     }
@@ -231,7 +238,7 @@ async function onboardUser(accessToken, tierID, externalSignal, endpoints) {
   console.log(`[ProjectId] Onboarding user with tier: ${tierID}`);
 
   const reqBody = { tierId: tierID, metadata: LOAD_CODE_ASSIST_METADATA };
-  const MAX_ATTEMPTS = 5;
+  const MAX_ATTEMPTS = 2;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     // Bail out immediately if the connection was removed
@@ -239,7 +246,7 @@ async function onboardUser(accessToken, tierID, externalSignal, endpoints) {
 
     // Per-attempt timeout controller; forwards external abort as well
     const localCtrl = new AbortController();
-    const timeoutId = setTimeout(() => localCtrl.abort(), 30_000);
+    const timeoutId = setTimeout(() => localCtrl.abort(), 10_000);
     const forwardAbort = () => localCtrl.abort();
     externalSignal?.addEventListener("abort", forwardAbort);
 
@@ -258,9 +265,10 @@ async function onboardUser(accessToken, tierID, externalSignal, endpoints) {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
-        throw new Error(
-          `onboardUser HTTP ${response.status}: ${errorText.slice(0, 200)}`,
+        console.warn(
+          `[ProjectId] onboardUser HTTP ${response.status}: ${errorText.slice(0, 200)}`,
         );
+        return null;
       }
 
       const data = await response.json();
@@ -273,34 +281,30 @@ async function onboardUser(accessToken, tierID, externalSignal, endpoints) {
           );
           return projectId;
         }
-        throw new Error("onboardUser done but no project_id in response");
+        console.warn("[ProjectId] onboardUser done but no project_id in response");
+        return null;
       }
 
-      // Server not done yet – wait and retry
-      console.log(
-        `[ProjectId] Onboard attempt ${attempt}/${MAX_ATTEMPTS}: not done yet, waiting...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Server not done yet – wait and retry once if max attempts not reached
+      if (attempt < MAX_ATTEMPTS) {
+        console.log(
+          `[ProjectId] Onboard attempt ${attempt}/${MAX_ATTEMPTS}: not done yet, waiting...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
     } catch (error) {
       clearTimeout(timeoutId);
       if (error.name === "AbortError") {
         console.warn(
           `[ProjectId] onboardUser attempt ${attempt} aborted (timeout or connection removed)`,
         );
-        if (externalSignal?.aborted) return null; // connection gone – stop retrying
-        continue;
-      }
-      if (attempt === MAX_ATTEMPTS) {
+        if (externalSignal?.aborted) return null;
+      } else {
         console.warn(
-          `[ProjectId] onboardUser failed after ${MAX_ATTEMPTS} attempts: ${error.message}`,
+          `[ProjectId] onboardUser attempt ${attempt} error: ${error.message}`,
         );
-        return null;
       }
-      // Continue to next attempt instead of throwing (which would skip remaining retries)
-      console.warn(
-        `[ProjectId] onboardUser attempt ${attempt} failed: ${error.message}, retrying...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return null;
     } finally {
       clearTimeout(timeoutId);
       externalSignal?.removeEventListener("abort", forwardAbort);

@@ -26,6 +26,9 @@ import kimchi from "./kimchi.js";
 import trae from "./trae.js";
 import windsurf from "./windsurf.js";
 import zed from "./zed.js";
+import minimaxCode from "./minimax-code.js";
+import minimaxCodeGlobal from "./minimax-code-global.js";
+import nous from "./nous.js";
 
 // Provider configurations
 const PROVIDERS = {
@@ -51,6 +54,9 @@ const PROVIDERS = {
   trae,
   windsurf,
   zed,
+  "minimax-code": minimaxCode,
+  "minimax-code-global": minimaxCodeGlobal,
+  nous,
 };
 
 export { PROVIDERS };
@@ -112,6 +118,11 @@ export async function generateAuthData(providerName, redirectUri, meta) {
     flowType: provider.flowType,
     fixedPort: provider.fixedPort,
     callbackPath: provider.callbackPath || "/callback",
+    // Zed: surface the system_id embedded in the sign-in URL so the frontend
+    // can thread it through register-session → exchange → stored connection
+    // (exchangeTokens re-runs prepareConfig, which would otherwise mint a
+    // different one). Absent for every other provider — purely additive.
+    ...(config.systemId ? { systemId: config.systemId } : {}),
   };
 }
 

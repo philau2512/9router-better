@@ -2,9 +2,20 @@ import { platform, arch, hostname } from "os";
 import { PROVIDERS } from "./providers.js";
 import { createRequire } from "module";
 
+// Nous Portal requires attribution for some API-key models. Use a neutral
+// router identity rather than exposing a credential or claiming another client.
+export const NOUS_ATTRIBUTION = {
+  hostname: "inference-api.nousresearch.com",
+  chatCompletionsPath: "/v1/chat/completions",
+  tags: ["product=9router", "client=9router", "user=9router"],
+};
+
 // === Gemini CLI ===
 export const GEMINI_CLI_VERSION = "0.34.0";
 export const GEMINI_CLI_API_CLIENT = "google-genai-sdk/1.41.0 gl-node/v22.19.0";
+
+// === Codex CLI === derive từ registry codex.transport
+export const CODEX_CLI_VERSION = "0.154.0";
 
 // Map Node arch to Gemini CLI arch string (x64/x86/arm64/...)
 function geminiCLIArch() {
@@ -178,6 +189,11 @@ export const CLAUDE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official C
 // makes the backend flag the request and answer 429 Quota Exhausted.
 export const ANTIGRAVITY_PROMPT_REWRITES = [
   { from: "You are a Claude agent, built on Anthropic's Claude Agent SDK.", to: "" },
+  { from: /You are Hermes Agent,\s*(an intelligent AI assistant)(?: created by Nous Research)?\./gi, to: "You are Hermes Agent. You are $1." },
+  // Claude Code prepends this line to its system prompt. The Claude-format translator strips it,
+  // but OpenAI-format clients (e.g. proxies that convert Claude Code to /v1/chat/completions)
+  // pass it through, and any system text containing it gets a fake 429 RESOURCE_EXHAUSTED.
+  { from: /^x-anthropic-billing-header:[^\n]*(?:\r?\n)*/gim, to: "" },
   { from: /opencode/gi, to: (m) => (m === "OpenCode" ? "Antigravity" : m === "OPENCODE" ? "ANTIGRAVITY" : "antigravity") }
 ];
 
@@ -197,9 +213,9 @@ export const REFRESH_LEAD_MS = {
 // Codex background auto-refresh: scan every 15 minutes and rotate eligible tokens
 // two days before expiry. Temporary upstream failures retry with short backoff.
 export const CODEX_AUTO_REFRESH = {
-  leadMs: 2 * 24 * 60 * 60 * 1000, // 2 days
+  leadMs: 3 * 24 * 60 * 60 * 1000, // 2 days
   maxAttempts: 3,
-  retryDelayMs: 1_000,
+  retryDelayMs: 3_000,
 };
 
 // OAuth endpoints

@@ -1,4 +1,5 @@
 import { platform, arch } from "os";
+import REGISTRY from "../providers/registry/index.js";
 import { ANTIGRAVITY_BASE_URLS } from "../providers/antigravity-provider-metadata.js";
 import { ANTIGRAVITY_IDE_USER_AGENT } from "../providers/shared.js";
 import {
@@ -92,7 +93,8 @@ export const PROVIDERS = {
     format: "openai-responses",
     headers: {
       originator: "codex_cli_rs",
-      "User-Agent": "codex_cli_rs/0.136.0",
+      "User-Agent": "codex_cli_rs/0.159.0",
+      version: "0.159.0",
     },
     clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
     tokenUrl: "https://auth.openai.com/oauth/token",
@@ -166,6 +168,25 @@ export const PROVIDERS = {
     baseUrl: KIMI_CODING_BASE_URL,
     format: "claude",
     headers: { ...CLAUDE_API_HEADERS },
+    transports: [
+      {
+        format: "openai",
+        baseUrl: "https://api.kimi.com/coding/v1/chat/completions",
+        auth: { combined: true, header: "Authorization", scheme: "bearer", hooks: ["kimiHeaders"] },
+      },
+      {
+        format: "claude",
+        baseUrl: "https://api.kimi.com/coding/v1/messages",
+        urlSuffix: "?beta=true",
+        headers: { ...CLAUDE_API_HEADERS },
+        auth: { combined: true, header: "x-api-key", scheme: "raw", hooks: ["kimiHeaders"] },
+      },
+      {
+        format: "openai-responses",
+        baseUrl: "https://api.kimi.com/coding/v1/responses",
+        auth: { combined: true, header: "Authorization", scheme: "bearer", hooks: ["kimiHeaders"] },
+      },
+    ],
   },
   minimax: {
     baseUrl: "https://api.minimax.io/anthropic/v1/messages",
@@ -445,6 +466,10 @@ export const PROVIDERS = {
     format: "openai",
     headers: { "x-opencode-client": "desktop" },
     noAuth: true,
+    forceStream: true,
+    quirks: {
+      forceAutoToolChoiceModels: ["muse-spark-1.3-contributor-free"],
+    },
   },
   "opencode-go": {
     baseUrl: "https://opencode.ai/zen/go/v1/chat/completions",
@@ -469,6 +494,33 @@ export const PROVIDERS = {
       {
         format: "openai-responses",
         baseUrl: "https://opencode.ai/zen/go/v1/responses",
+        auth: { combined: true, header: "Authorization", scheme: "bearer" },
+      },
+    ],
+  },
+  "opencode-zen": {
+    baseUrl: "https://opencode.ai/zen/v1/chat/completions",
+    format: "openai",
+    headers: {},
+    transports: [
+      {
+        format: "openai",
+        baseUrl: "https://opencode.ai/zen/v1/chat/completions",
+        auth: { combined: true, header: "Authorization", scheme: "bearer" },
+      },
+      {
+        format: "claude",
+        baseUrl: "https://opencode.ai/zen/v1/messages",
+        auth: {
+          combined: true,
+          header: "x-api-key",
+          scheme: "raw",
+          anthropicVersion: true,
+        },
+      },
+      {
+        format: "openai-responses",
+        baseUrl: "https://opencode.ai/zen/v1/responses",
         auth: { combined: true, header: "Authorization", scheme: "bearer" },
       },
     ],
@@ -514,6 +566,52 @@ export const PROVIDERS = {
     baseUrl: "",
     format: "openai",
     headers: {},
+  },
+  bedrock: {
+    baseUrl: "https://bedrock-runtime.{region}.amazonaws.com",
+    format: "claude",
+    auth: { header: "aws-sigv4", scheme: "raw" },
+  },
+  "bedrock-xai": {
+    baseUrl: "https://bedrock-runtime.{region}.amazonaws.com",
+    format: "openai",
+    auth: { header: "aws-sigv4", scheme: "raw" },
+  },
+  "minimax-code": {
+    baseUrl: "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",
+    format: "claude",
+    thinkingFormat: "claude-adaptive",
+    headers: {
+      "User-Agent": "MiniMaxAgent",
+      "X-Mavis-Agent-Id": "main",
+    },
+    auth: {
+      combined: true,
+      header: "Authorization",
+      scheme: "bearer",
+      anthropicVersion: true,
+      hooks: ["minimaxHeaders"],
+    },
+  },
+  "minimax-code-global": {
+    baseUrl: "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
+    format: "claude",
+    thinkingFormat: "claude-adaptive",
+    headers: {
+      "User-Agent": "MiniMaxAgent",
+      "X-Mavis-Agent-Id": "main",
+    },
+    auth: {
+      combined: true,
+      header: "Authorization",
+      scheme: "bearer",
+      anthropicVersion: true,
+      hooks: ["minimaxHeaders"],
+    },
+  },
+  nous: {
+    baseUrl: "https://inference-api.nousresearch.com/v1/chat/completions",
+    format: "openai",
   },
   // Cloudflare Workers AI - {accountId} resolved from credentials.providerSpecificData.accountId
   "cloudflare-ai": {
@@ -698,3 +796,7 @@ export function resolveXiaomiTokenplanBaseUrl(credentials) {
     XIAOMI_TOKENPLAN_REGIONS[XIAOMI_TOKENPLAN_DEFAULT_REGION]
   );
 }
+
+export const PROVIDER_OAUTH = Object.fromEntries(
+  REGISTRY.filter((entry) => entry.oauth).map((entry) => [entry.id, entry.oauth]),
+);

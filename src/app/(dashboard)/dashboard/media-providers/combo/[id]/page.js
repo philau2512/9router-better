@@ -112,7 +112,11 @@ export default function ComboDetailPage() {
         setApiKey((k.keys || []).find((x) => x.isActive !== false)?.key || "");
       }
       if (connsRes.ok)
-        setConnections((await connsRes.json()).connections || []);
+        setConnections(
+          ((await connsRes.json()).connections || []).filter(
+            (x) => x.isActive !== false,
+          ),
+        );
       if (!comboRes.ok) {
         setCombo(null);
         setLoading(false);

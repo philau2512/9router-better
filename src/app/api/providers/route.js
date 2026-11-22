@@ -19,6 +19,7 @@ import {
   normalizeProviderId,
   normalizeProviderSpecificData,
 } from "@/lib/providerNormalization";
+import { toProviderConnectionResponse } from "@/lib/providerConnectionResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -96,12 +97,8 @@ export async function GET() {
           c.provider
         : c.name;
       return {
-        ...c,
+        ...toProviderConnectionResponse(c),
         name,
-        apiKey: undefined,
-        accessToken: undefined,
-        refreshToken: undefined,
-        idToken: undefined,
       };
     });
 
@@ -161,7 +158,14 @@ export async function POST(request) {
     if (!provider || !isValidProvider) {
       return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
     }
-    if (!apiKey && provider !== "ollama-local") {
+    // A provider may declare a providerSpecificData field that stands in for an API key — e.g.
+    // Bedrock's `profile`, where the credential lives in the local AWS config and there is no
+    // key to paste. Without this, following such a provider's own setup notice returns 400.
+    const apiKeySubstitute = AI_PROVIDERS[provider]?.apiKeyOptionalWith;
+    const hasApiKeySubstitute = !!(
+      apiKeySubstitute && body.providerSpecificData?.[apiKeySubstitute]
+    );
+    if (!apiKey && provider !== "ollama-local" && !hasApiKeySubstitute) {
       return NextResponse.json(
         {
           error: `${isWebCookieProvider ? "Cookie value" : "API Key"} is required`,
@@ -258,11 +262,10 @@ export async function POST(request) {
       testStatus: testStatus || "unknown",
     });
 
-    // Hide sensitive fields
-    const result = { ...newConnection };
-    delete result.apiKey;
-
-    return NextResponse.json({ connection: result }, { status: 201 });
+    return NextResponse.json(
+      { connection: toProviderConnectionResponse(newConnection) },
+      { status: 201 },
+    );
   } catch (error) {
     console.log("Error creating provider:", error);
     return NextResponse.json(

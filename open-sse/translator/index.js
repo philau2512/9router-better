@@ -1,13 +1,17 @@
 import { FORMATS } from "./formats.js";
-import { ensureToolCallIds, fixMissingToolResponses } from "./concerns/toolCall.js";
-import { prepareClaudeRequest } from "./formats/claude.js";
+import { fixMissingToolResponses } from "./concerns/toolCall.js";
+import { ensureToolCallIds } from "./helpers/toolCallHelper.js";
+import { prepareClaudeRequest, ensureTrailingUserTurn } from "./formats/claude.js";
 import { cloakClaudeTools, decloakStreamChunk } from "../utils/claudeCloaking.js";
+import { restoreToolNames } from "../utils/opencodeFingerprint.js";
 import { filterToOpenAIFormat } from "./formats/openai.js";
 import { normalizeThinkingConfig } from "../services/provider.js";
 import { applyThinking, captureThinking } from "./concerns/thinkingUnified.js";
 import { captureSessionId } from "../utils/sessionManager.js";
+import { ensureStreamToolCallIds } from "../utils/streamHelpers.js";
 import { AntigravityExecutor } from "../executors/antigravity.js";
 import { PROVIDERS } from "../providers/index.js";
+import { ROLE, GEMINI_ROLE } from "./schema/roles.js";
 
 // Registry for translators. Lazy-init guards against circular-import order:
 // translator modules call register() (side-effect) before this module's body runs.
@@ -48,10 +52,26 @@ function stripContentTypes(body, stripList = []) {
   }
 }
 
+// Role the client's conversation actually ended on, in the source format's own
+// shape — not every source uses messages[] (Gemini/Antigravity: contents[],
+// Responses/Codex: input[]). Only an explicit trailing model/assistant turn is
+// real prefill and must reach ensureTrailingUserTurn as ROLE.ASSISTANT; every
+// other tail (including no role, e.g. a function output) stays undefined so
+// the emptied-turn fix still applies.
+function detectClientLastRole(body) {
+  if (Array.isArray(body?.messages)) return body.messages[body.messages.length - 1]?.role;
+  const items = Array.isArray(body?.contents) ? body.contents : Array.isArray(body?.input) ? body.input : null;
+  if (!items) return undefined;
+  const role = items[items.length - 1]?.role;
+  return role === ROLE.ASSISTANT || role === GEMINI_ROLE.MODEL ? ROLE.ASSISTANT : undefined;
+}
+
 // Translate request: source -> openai -> target
 export function translateRequest(sourceFormat, targetFormat, model, body, stream = true, credentials = null, provider = null, reqLogger = null, stripList = [], connectionId = null, clientTool = null) {
   ensureInitialized();
   let result = body;
+  // Role the client actually ended on, before any translator drops an emptied turn.
+  const clientLastRole = detectClientLastRole(body);
 
   // Strip explicit content types (opt-in via strip[] in PROVIDER_MODELS entry)
   stripContentTypes(result, stripList);
@@ -131,6 +151,7 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
   if (targetFormat === FORMATS.CLAUDE) {
     const apiKey = credentials?.accessToken || credentials?.apiKey || null;
     result = prepareClaudeRequest(result, provider, apiKey, connectionId, credentials?.rawHeaders, clientSessionId);
+    if (Array.isArray(result?.messages)) result.messages = ensureTrailingUserTurn(result.messages, clientLastRole);
   }
 
   // Claude cloaking: rename client tools with CLAUDE_TOOL_SUFFIX (anti-ban)
@@ -167,11 +188,16 @@ export function translateResponse(targetFormat, sourceFormat, chunk, state) {
   // even when no format conversion is needed, so streamed tool_use blocks must
   // be decloaked here or the client sees an unknown ("_ide"-suffixed) tool.
   if (sourceFormat === targetFormat) {
-    return chunk == null ? [] : [decloakStreamChunk(chunk, state?.toolNameMap)];
+    if (chunk == null) return [];
+    // Same-format (openai→openai) passthrough: the upstream chunk reaches the
+    // client as-is. A fragment that opens a new tool-call index without an id
+    // aborts strict OpenAI-compatible clients (#4992) — mint/reuse one first.
+    if (state && typeof chunk === "object") {
+      if (!state.streamToolCallIds) state.streamToolCallIds = new Map();
+      ensureStreamToolCallIds(chunk, state.streamToolCallIds);
+    }
+    return [restoreToolNames(decloakStreamChunk(chunk, state?.toolNameMap), state?.toolNameMap)];
   }
-
-  let results = [chunk];
-  let openaiResults = null; // Store OpenAI intermediate results
 
   // Direct route: if a response translator is registered for this exact
   // target:source pair, use it instead of pivoting through OpenAI. Mirrors the
@@ -182,6 +208,37 @@ export function translateResponse(targetFormat, sourceFormat, chunk, state) {
     const converted = directFn(chunk, state);
     return converted ? (Array.isArray(converted) ? converted : [converted]) : [];
   }
+
+  // Two-hop pivot fast path: targetFormat -> OPENAI -> sourceFormat
+  // Avoids array wrapping and spread overhead for the dominant single-delta stream case
+  if (targetFormat !== FORMATS.OPENAI && sourceFormat !== FORMATS.OPENAI) {
+    const toOpenAI = responseRegistry.get(`${targetFormat}:${FORMATS.OPENAI}`);
+    const fromOpenAI = responseRegistry.get(`${FORMATS.OPENAI}:${sourceFormat}`);
+    if (toOpenAI && fromOpenAI) {
+      const mid = toOpenAI(chunk, state);
+      if (!mid) return [];
+      if (!Array.isArray(mid)) {
+        const out = fromOpenAI(mid, state);
+        if (!out) return [];
+        return Array.isArray(out) ? out : [out];
+      }
+      const finalResults = [];
+      for (let i = 0; i < mid.length; i++) {
+        const out = fromOpenAI(mid[i], state);
+        if (out) {
+          if (Array.isArray(out)) {
+            for (let j = 0; j < out.length; j++) finalResults.push(out[j]);
+          } else {
+            finalResults.push(out);
+          }
+        }
+      }
+      return finalResults;
+    }
+  }
+
+  let results = [chunk];
+  let openaiResults = null; // Store OpenAI intermediate results
 
   // Step 1: target -> openai (if target is not openai)
   if (targetFormat !== FORMATS.OPENAI) {
@@ -204,7 +261,11 @@ export function translateResponse(targetFormat, sourceFormat, chunk, state) {
       for (const r of results) {
         const converted = fromOpenAI(r, state);
         if (converted) {
-          finalResults.push(...(Array.isArray(converted) ? converted : [converted]));
+          if (Array.isArray(converted)) {
+            for (let j = 0; j < converted.length; j++) finalResults.push(converted[j]);
+          } else {
+            finalResults.push(converted);
+          }
         }
       }
       results = finalResults;
@@ -235,6 +296,10 @@ export function initState(sourceFormat) {
     inThinkingBlock: false,
     currentBlockIndex: null,
     toolCalls: new Map(),
+    // Tool-call ids already emitted to the client, keyed by tool-call index.
+    // A fragment that opens a NEW index without an id breaks strict
+    // OpenAI-compatible clients (#4992).
+    streamToolCallIds: new Map(),
     finishReason: null,
     finishReasonSent: false,
     usage: null,
@@ -266,6 +331,11 @@ export function initState(sourceFormat) {
       funcArgsDone: {},
       funcItemDone: {},
       customToolNames: new Set(),
+      // Chat Completions usage for response.completed. Not state.usage: other translators in
+      // the same pipeline overwrite that in their own shapes.
+      responsesUsage: null,
+      // finish_reason arrived before usage; response.completed waits for the usage chunk.
+      completionPending: false,
       completedSent: false
     };
   }

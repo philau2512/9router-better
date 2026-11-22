@@ -13,6 +13,12 @@ import {
   PROVIDERS,
 } from "open-sse/config/providers.js";
 import { openaiToCommandCode } from "open-sse/translator/request/openai-to-commandcode.js";
+import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
+import {
+  createNousApiKeyProbe,
+  getNousApiKeyValidationError,
+  isNousApiKeyAccepted,
+} from "open-sse/services/nous.js";
 import { PROVIDER_ENDPOINTS } from "@/shared/constants/config";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 
@@ -158,7 +164,16 @@ export async function POST(request) {
     const { apiKey, providerSpecificData } = body;
 
     const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true;
-    if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth)) {
+    // Same exemption as the create route: a provider can name a providerSpecificData field
+    // that replaces the API key (Bedrock's `profile`), so validating that setup must not 400.
+    const apiKeySubstitute = AI_PROVIDERS[provider]?.apiKeyOptionalWith;
+    const hasApiKeySubstitute = !!(
+      apiKeySubstitute && providerSpecificData?.[apiKeySubstitute]
+    );
+    if (
+      !provider ||
+      (!apiKey && provider !== "ollama-local" && !isNoAuth && !hasApiKeySubstitute)
+    ) {
       return NextResponse.json(
         { error: "Provider and API key required" },
         { status: 400 },
@@ -320,6 +335,17 @@ export async function POST(request) {
         });
       }
 
+      // AWS-signed providers (Bedrock) have no bearer key for the generic probes below, which
+      // would reject bedrock outright and send bedrock-xai to a literal "{region}" host.
+      if (AI_PROVIDERS[provider]?.credentialForm === "aws") {
+        return NextResponse.json(
+          await probeBedrockCredentials(
+            { apiKey, providerSpecificData },
+            fetch,
+          ),
+        );
+      }
+
       // Generic probe for webSearch/webFetch providers (config-driven)
       const webResult = await probeWebProvider(provider, apiKey);
       if (webResult !== null) {
@@ -392,6 +418,19 @@ export async function POST(request) {
           );
           isValid = openrouterRes.ok;
           break;
+
+        case "nous": {
+          // Nous exposes /models publicly, so a models request cannot validate
+          // the Portal key. Use the smallest authenticated inference instead.
+          const probe = createNousApiKeyProbe(apiKey);
+          const res = await fetch(probe.url, {
+            ...probe.options,
+            signal: AbortSignal.timeout(8000),
+          });
+          isValid = isNousApiKeyAccepted(res.status);
+          if (!isValid) error = getNousApiKeyValidationError(res.status);
+          break;
+        }
 
         case "glm":
         case "glm-cn":

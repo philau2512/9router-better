@@ -78,8 +78,10 @@ export default function ProviderConnectionsCard({
   onOpenGrokBulkImport,
   onViewJson,
   autoPingConnections,
+  autoPingSchedules,
   savingAutoPingConnectionId,
   handleToggleAutoPing,
+  onConfigureAutoPingSchedule,
 }) {
   if (isFreeNoAuth) {
     return <NoAuthProxyCard providerId={providerId} />;
@@ -286,8 +288,10 @@ export default function ProviderConnectionsCard({
               handleWarmupSingle={handleWarmupSingle}
               onViewJson={onViewJson}
               autoPingConnections={autoPingConnections}
+              autoPingSchedules={autoPingSchedules}
               savingAutoPingConnectionId={savingAutoPingConnectionId}
               onToggleAutoPing={handleToggleAutoPing}
+              onConfigureAutoPingSchedule={onConfigureAutoPingSchedule}
             />
           )}
 

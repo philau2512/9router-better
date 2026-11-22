@@ -9,6 +9,14 @@ export const PROVIDER_ALIASES = Object.freeze({
   gh: "github",
   kr: "kiro",
   cu: "cursor",
+  mm: "minimax-code",
+  "minimax-code": "minimax-code",
+  mmg: "minimax-code-global",
+  "minimax-code-global": "minimax-code-global",
+  bedrock: "bedrock",
+  br: "bedrock",
+  "bedrock-xai": "bedrock-xai",
+  brx: "bedrock-xai",
   kc: "kilocode",
   kmc: "kimi-coding",
   cl: "cline",
@@ -139,8 +147,10 @@ export const PROVIDER_ALIASES = Object.freeze({
   nscale: "nscale",
   baseten: "baseten",
   publicai: "publicai",
-  "nous-research": "nous-research",
-  nous: "nous-research",
+  "nous-research": "nous",
+  nous: "nous",
+  "nous-portal": "nous",
+  ns: "nous",
   glhf: "glhf",
   bb: "blackbox",
   blackbox: "blackbox",
@@ -251,6 +261,32 @@ export async function getModelInfoCore(modelStr, aliasesOrGetter) {
   };
 }
 
+// Config-driven prefix → provider inference (first match wins, fallback "openai").
+const MODEL_PREFIX_PROVIDERS = [
+  // Codex CLI sends this bare virtual model for auto-review — keep it on OAuth Codex (#1398).
+  [/^codex-auto-review$/, "codex"],
+  // Codex-only GPT model slugs: present in backend-api/codex/models but not on the
+  // OpenAI API.  Without these rules a bare model id (e.g. "gpt-5.6-terra" from the
+  // Codex CLI /model picker) resolves to provider "openai", which 404s for users that
+  // only have a Codex OAuth account and no OpenAI API key (#4405).
+  // Ranges covered: gpt-5.x, gpt-6.x, gpt-daybreak-*, gpt-reserve* — all are
+  // Codex-backend models.  Plain "gpt-4*" / "gpt-3.5*" / "gpt-4o*" fall through to
+  // the generic gpt-* → openai rule below.
+  [/^gpt-[56]\./, "codex"],
+  [/^gpt-6-/, "codex"],
+  [/^gpt-daybreak-/, "codex"],
+  [/^gpt-reserve/, "codex"],
+  [/^claude-/, "anthropic"],
+  // Bedrock inference profile IDs: us.anthropic.*, global.anthropic.*, eu.anthropic.*, etc.
+  // Claude Code stores the Bedrock model ID directly (e.g. us.anthropic.claude-sonnet-4-6),
+  // so bare usage without a provider/ prefix must route to bedrock, not fall through to openai.
+  [/^(us|eu|ap|global)\.(anthropic|meta|amazon|mistral|xai)\./, "bedrock"],
+  [/^gemini-/, "gemini"],
+  [/^gpt-/, "openai"],
+  [/^o[134]/, "openai"],
+  [/^deepseek-/, "openrouter"],
+];
+
 /**
  * Infer provider from model name prefix
  * Used as fallback when no provider prefix or alias is given
@@ -258,12 +294,5 @@ export async function getModelInfoCore(modelStr, aliasesOrGetter) {
 function inferProviderFromModelName(modelName) {
   if (!modelName) return "openai";
   const m = modelName.toLowerCase();
-  if (m.startsWith("claude-")) return "anthropic";
-  if (m.startsWith("gemini-")) return "gemini";
-  if (m.startsWith("gpt-")) return "openai";
-  if (m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4"))
-    return "openai";
-  if (m.startsWith("deepseek-")) return "openrouter";
-  // Default fallback
-  return "openai";
+  return MODEL_PREFIX_PROVIDERS.find(([re]) => re.test(m))?.[1] || "openai";
 }

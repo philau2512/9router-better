@@ -5,7 +5,7 @@ import {
   getSettings,
 } from "@/lib/localDb";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { getAntigravityQuotaCache } from "./antigravityQuota.js";
+import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
 import {
   formatRetryAfter,
   checkFallbackError,
@@ -174,13 +174,17 @@ export async function getProviderCredentials(
     // Antigravity quota cache is lazy: only populated after that account returns 409/429.
     const isAntigravity = providerId === "antigravity";
     const antigravityQuotaCache = isAntigravity && model ? getAntigravityQuotaCache() : null;
+    const requestedModel = options?.requestedModel || model;
 
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections
     const availableConnections = connections.filter((c) => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
+      const enabled = c.providerSpecificData?.enabledModels;
+      if (providerId === "codex" && Array.isArray(enabled) && enabled.length && requestedModel && !enabled.includes(requestedModel)) return false;
       if (isAntigravity && model && antigravityQuotaCache) {
-        const quota = antigravityQuotaCache.get(c.id)?.[model];
+        const connQuotas = antigravityQuotaCache.get(c.id);
+        const quota = getAntigravityModelQuota(connQuotas, model) || connQuotas?.[model];
         if (quota && quota.remainingPercentage <= 0 && quota.resetAt && new Date(quota.resetAt).getTime() > Date.now()) {
           const account = c.id?.slice(0, 8) || "unknown";
           log.info("AG_QUOTA", `${account} | CACHE_BLOCK ${model} — skip upstream until ${quota.resetAt}`);
@@ -216,7 +220,9 @@ export async function getProviderCredentials(
         .filter(Boolean);
       if (isAntigravity && model && antigravityQuotaCache) {
         connections.forEach((c) => {
-          const resetAt = antigravityQuotaCache.get(c.id)?.[model]?.resetAt;
+          const connQuotas = antigravityQuotaCache.get(c.id);
+          const quota = getAntigravityModelQuota(connQuotas, model) || connQuotas?.[model];
+          const resetAt = quota?.resetAt;
           if (resetAt && new Date(resetAt).getTime() > Date.now()) expiries.push(resetAt);
         });
       }
@@ -455,7 +461,7 @@ export async function markAccountUnavailable(
       modelLock___all: nextMonth,
       testStatus: "unavailable",
       errorCode: status,
-      lastError: `Quota reached: ${String(errorText).slice(0, 100)}`,
+      lastError: `Quota reached: ${String(errorText).slice(0, 500)}`,
       lastErrorAt: now.toISOString(),
       backoffLevel: 0,
     });
@@ -465,7 +471,7 @@ export async function markAccountUnavailable(
   if (isReachLimit || isInvalidToken || isSuspended) {
     const reason =
       typeof errorText === "string"
-        ? errorText.slice(0, 100)
+        ? errorText.slice(0, 500)
         : isInvalidToken
           ? "Invalid/Revoked Token"
           : isSuspended
@@ -512,12 +518,13 @@ export async function markAccountUnavailable(
       status,
       errorText,
       backoffLevel,
+      resolveProviderId(provider),
     ));
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
   const reason =
-    typeof errorText === "string" ? errorText.slice(0, 100) : "Provider error";
+    typeof errorText === "string" ? errorText.slice(0, 500) : "Provider error";
   const lockUpdate = buildModelLockUpdate(model, cooldownMs);
 
   await updateProviderConnection(connectionId, {

@@ -1,12 +1,6 @@
 /**
  * Token Refresh barrel — re-exports every public symbol so existing
- * `import { … } from "../services/tokenRefresh.js"` lines keep working.
- *
- * Actual implementations live in:
- *   - ./refresh-dedup.js        (dedupRefresh, constants, error checks)
- *   - ./refresh-providers.js    (per-provider refresh functions)
- *   - ./refresh-vertex.js       (Vertex AI SA JSON + JWT token mint)
- *   - ./refresh-orchestrator.js (routing, formatting, retry)
+ * imports keep working. Implementations live in tokenRefresh/ modules.
  */
 
 export {
@@ -35,6 +29,8 @@ export {
   refreshCodebuddyIntlToken,
   refreshTraeToken,
   refreshWindsurfToken,
+  refreshMiniMaxCodeToken,
+  refreshNousToken,
 } from "./tokenRefresh/providers.js";
 
 export { parseVertexSaJson, refreshVertexToken } from "./refresh-vertex.js";

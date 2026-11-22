@@ -201,6 +201,33 @@ export function useEndpointApiKeys() {
     });
   };
 
+  const handleUpdateKeyAccess = async (id, access) => {
+    try {
+      const { ok, data } = await updateKey(id, { access });
+      if (ok && data?.key) {
+        updateKeyInList(id, (existingKey) =>
+          buildUpdatedKey(existingKey, { access: data.key.access }, data.key),
+        );
+      }
+    } catch (error) {
+      console.log("Error updating key access:", error);
+    }
+  };
+
+  const confirmRestrictKey = (key) => {
+    setConfirmState({
+      title: "Restrict API Key",
+      message: `Restrict API key "${key.name}"?\n\nIt will only be able to call the combos and models you add. Until you add one, it can call nothing.`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        handleUpdateKeyAccess(key.id, {
+          restricted: true,
+          allow: key.access?.allow || [],
+        });
+      },
+    });
+  };
+
   return {
     keys,
     loading,
@@ -230,5 +257,7 @@ export function useEndpointApiKeys() {
     maskKey,
     toggleKeyVisibility,
     confirmPauseKey,
+    handleUpdateKeyAccess,
+    confirmRestrictKey,
   };
 }

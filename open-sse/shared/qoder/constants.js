@@ -33,6 +33,39 @@ export const QODER_CHAT_SIG_PATH = "/api/v2/service/pro/sse/agent_chat_generatio
 export const QODER_CHAT_URL = `${QODER_CHAT_BASE}/algo${QODER_CHAT_SIG_PATH}?FetchKeys=llm_model_result&AgentId=agent_common`;
 export const QODER_CHAT_URL_ENCODED = `${QODER_CHAT_URL}&Encode=1`;
 export const QODER_MODEL_LIST_URL = `${QODER_CHAT_BASE}/algo/api/v2/model/list`;
+// Official qodercli uploads images here (COSY-signed PUT multipart, field "file")
+// instead of inlining base64 into agent_chat_generation.
+export const QODER_IMAGE_UPLOAD_SIG_PATH = "/api/v2/image/upload";
+
+// Drop remaining inlined binaries if the Qoder JSON body would still exceed this.
+// 30MB+ payloads are what blow past Claude-Code's ~200k context on the wire.
+export const QODER_MAX_PAYLOAD_BYTES = 6 * 1024 * 1024;
+// If OSS upload fails, keep tiny data-URIs; anything larger is stubbed.
+export const QODER_INLINE_FALLBACK_MAX_BYTES = 512 * 1024;
+
+// Context-window tier selection (see shared/qoder/contextTier.js). The IDE exposes the
+// model's context_config tiers (200K/400K/1M); we auto-escalate when the estimated prompt
+// (+ headroom, tokenizer variance) no longer fits the current max_input_tokens.
+export const QODER_CONTEXT_TIER_HEADROOM = 0.15;
+export const QODER_CONTEXT_TIER_ENV = "QODER_CONTEXT_TIER";
+export const QODER_CONTEXT_TIER_MODES = Object.freeze({ AUTO: "auto", MAX: "max", DEFAULT: "default" });
+
+/**
+ * Job-token (jt-...) traffic must hit api2.qoder.sh — api3 rejects jt- with
+ * "Login expired" (403). Device tokens (dt-...) stay on api3. PATs (pt-...)
+ * are exchanged for jt- before this is consulted.
+ */
+export function qoderInferenceBase(credentials) {
+  const raw = credentials?.apiKey || credentials?.accessToken;
+  if (
+    typeof raw === "string" &&
+    !raw.startsWith("pt-") &&
+    (raw.startsWith("jt-") || (credentials?.accessToken || "").startsWith("jt-"))
+  ) {
+    return QODER_CHAT_BASE_ALT;
+  }
+  return QODER_CHAT_BASE;
+}
 
 // COSY header constants. These are not arbitrary — the upstream signature
 // validation matches them against the values used at signing time.
@@ -63,7 +96,68 @@ export const QODER_MODEL_MAP = {
   gfmodel: "gfmodel",
   kmodel: "kmodel",
   mmodel: "mmodel",
+  // Frontier reasoning pair. Canonical keys are `smodel` / `cmodel`; the Qoder
+  // picker only shows the display names Sonus / Cantus. The per-account catalog
+  // frequently omits them even for entitled accounts — see
+  // QODER_STATIC_MODEL_CONFIGS below.
+  smodel: "smodel",
+  cmodel: "cmodel",
 };
+
+/**
+ * Static `model_config` blocks for models the per-account catalog does not
+ * reliably publish.
+ *
+ * `/algo/api/v2/model/list` is per-account, and the frontier pair Sonus
+ * (`smodel`) / Cantus (`cmodel`) is frequently absent from it even for accounts
+ * that can use them. Without a `model_config` the executor refuses the request
+ * before it is ever sent ("model_config for ... not yet known"), so the model
+ * looks unavailable when upstream would have served it.
+ *
+ * The chat endpoint does not validate `model_config.key` against the catalog, so
+ * supplying the block ourselves makes these routable. Verified against a live
+ * account: both keys are accepted and stream a real completion, and upstream
+ * tracks them as distinct queue entries (queue/status echoes modelKey=smodel /
+ * modelKey=cmodel).
+ *
+ * This is a FALLBACK only — a live catalog entry always wins, so a future
+ * catalog that publishes its own block for these keys takes precedence.
+ */
+const QODER_STATIC_MODEL_CONFIG_BASE = Object.freeze({
+  model: "",
+  format: "openai",
+  source: "system",
+  url: "",
+});
+
+export const QODER_STATIC_MODEL_CONFIGS = Object.freeze({
+  smodel: Object.freeze({
+    ...QODER_STATIC_MODEL_CONFIG_BASE,
+    key: "smodel",
+    display_name: "Sonus",
+    is_vl: true,
+    is_reasoning: true,
+    max_input_tokens: 180000,
+  }),
+  cmodel: Object.freeze({
+    ...QODER_STATIC_MODEL_CONFIG_BASE,
+    key: "cmodel",
+    display_name: "Cantus",
+    is_vl: true,
+    is_reasoning: true,
+    max_input_tokens: 180000,
+  }),
+});
+
+/**
+ * Static `model_config` for a canonical Qoder key, or null when there is no
+ * block for it (so genuinely unknown keys still fail loudly). Returns a fresh
+ * copy — callers may mutate `key` while aligning the alias path.
+ */
+export function getQoderStaticModelConfig(key) {
+  const cfg = QODER_STATIC_MODEL_CONFIGS[key];
+  return cfg ? { ...cfg, key } : null;
+}
 
 // RSA public key for COSY encryption (extracted from Qoder IDE v0.9).
 // Matches the CLIProxyAPIPlus branch and live qodercli traffic.

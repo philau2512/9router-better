@@ -1,9 +1,13 @@
 /**
  * Unit tests for qoder billing error detection.
  *
- * Ensures that billing blocks (code 112, 10605, pricingUrl) are detected
- * on the first SSE frame and returned as 403 responses so chatCore can
- * mark the connection unavailable and trigger combo failover.
+ * Ensures that billing blocks (code 112, 110, pricingUrl) are detected on the
+ * first SSE frame and returned as 403 responses so chatCore can mark the
+ * connection unavailable and trigger combo failover.
+ *
+ * Code 10605 is NOT a billing block: it is the transient model-queue throttle
+ * (`isQueued`/`RESOURCE_LIMIT`) and is handled by waiting for the queue to
+ * drain — see shared/qoder/queue.js and qoder-queue.test.js.
  */
 
 import { describe, it, expect } from "vitest";
@@ -17,9 +21,9 @@ describe("isBillingBlock", () => {
     expect(isBillingBlock(msg)).toBe(true);
   });
 
-  it("detects code 10605 (queue throttle)", () => {
+  it("does NOT treat code 10605 as billing (transient model queue)", () => {
     const msg = '{"code":"10605","message":"Queue limit"}';
-    expect(isBillingBlock(msg)).toBe(true);
+    expect(isBillingBlock(msg)).toBe(false);
   });
 
   it("detects pricingUrl field", () => {
@@ -69,17 +73,18 @@ describe("wrapQoderSSE billing detection", () => {
     expect(json.error.message).toContain("112");
   });
 
-  it("returns 403 response when first frame is billing block (code 10605)", async () => {
-    const billingEnv = JSON.stringify({
+  it("does not map code 10605 to 403 (the queue path handles it)", async () => {
+    const queuedEnv = JSON.stringify({
       statusCodeValue: 429,
       body: '{"code":"10605","message":"Queue limit"}',
     });
-    const upstream = `data: ${billingEnv}\n\n`;
+    const upstream = `data: ${queuedEnv}\n\n`;
 
     const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder/ultimate");
 
-    expect(wrapped.status).toBe(403);
-    expect(wrapped.ok).toBe(false);
+    // Not a billing block, so the upstream status is preserved rather than
+    // being rewritten to 403; the executor's queue loop owns this case.
+    expect(wrapped.status).not.toBe(403);
   });
 
   it("returns 403 response when first frame has pricingUrl", async () => {
@@ -94,7 +99,7 @@ describe("wrapQoderSSE billing detection", () => {
     expect(wrapped.status).toBe(403);
   });
 
-  it("passes through normal errors (non-billing) as wrapped SSE", async () => {
+  it("returns non-billing errors with their upstream HTTP status", async () => {
     const errorEnv = JSON.stringify({
       statusCodeValue: 500,
       body: "Internal server error",
@@ -103,22 +108,11 @@ describe("wrapQoderSSE billing detection", () => {
 
     const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder/ultimate");
 
-    // Normal error: still 200 response, error text in SSE body
-    expect(wrapped.status).toBe(200);
-    expect(wrapped.ok).toBe(true);
-
-    const reader = wrapped.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-    }
-    buf += decoder.decode();
-
-    expect(buf).toContain("[qoder error 500");
-    expect(buf).toContain("data: [DONE]");
+    expect(wrapped.status).toBe(500);
+    expect(wrapped.ok).toBe(false);
+    expect(await wrapped.json()).toEqual({
+      error: { message: "Internal server error", code: 500 },
+    });
   });
 
   it("passes through successful responses unchanged", async () => {

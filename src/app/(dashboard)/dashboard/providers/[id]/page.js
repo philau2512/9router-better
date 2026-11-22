@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { CardSkeleton } from "@/shared/components";
+import XiaomiMimoAuthModal from "@/shared/components/XiaomiMimoAuthModal";
 import {
   APIKEY_PROVIDERS,
   FREE_PROVIDERS,
@@ -35,6 +36,7 @@ import {
   updateProviderNode,
 } from "./utils/providerDetailPageApi";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
+import AutoPingScheduleModal from "./AutoPingScheduleModal";
 
 function getHeaderIconPath(
   providerInfo,
@@ -58,6 +60,7 @@ export default function ProviderDetailPage() {
   const providerId = params.id;
   const [providerNode, setProviderNode] = useState(null);
   const [showOAuthModal, setShowOAuthModal] = useState(false);
+  const [showXiaomiMimoModal, setShowXiaomiMimoModal] = useState(false);
   const [showIFlowCookieModal, setShowIFlowCookieModal] = useState(false);
   const [showAddApiKeyModal, setShowAddApiKeyModal] = useState(false);
   const [showBulkImportCodex, setShowBulkImportCodex] = useState(false);
@@ -262,9 +265,11 @@ export default function ProviderDetailPage() {
     handleViewJson,
     setActiveJsonConnection,
     autoPingConnections,
+    autoPingSchedules,
     autoPingSelection,
     savingAutoPingConnectionId,
     handleToggleAutoPing,
+    handleSaveAutoPing,
     setSelectedConnectionsAutoPing,
   } = useProviderDetailConnections({
     providerId,
@@ -273,6 +278,7 @@ export default function ProviderDetailPage() {
     onThinkingModeLoaded: setThinkingMode,
   });
 
+  const [scheduleConnection, setScheduleConnection] = useState(null);
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
 
   const handleRefreshLiveModels = useCallback(async () => {
@@ -356,6 +362,10 @@ export default function ProviderDetailPage() {
         setShowAgRiskModal(true);
         return;
       }
+    }
+    if (providerId === "xiaomi-mimo") {
+      setShowXiaomiMimoModal(true);
+      return;
     }
     if (isOAuth) {
       openOAuthConnection();
@@ -540,6 +550,9 @@ export default function ProviderDetailPage() {
 
       <ProviderConnectionsCard
         providerId={providerId}
+        enabledConnectionsCount={connections.filter(
+          (connection) => connection?.isActive !== false,
+        ).length}
         isFreeNoAuth={isFreeNoAuth}
         isOAuth={isOAuth}
         isCompatible={isCompatible}
@@ -592,8 +605,10 @@ export default function ProviderDetailPage() {
         onOpenGrokBulkImport={() => setShowBulkImportGrokCli(true)}
         onViewJson={handleViewJson}
         autoPingConnections={autoPingConnections}
+        autoPingSchedules={autoPingSchedules}
         savingAutoPingConnectionId={savingAutoPingConnectionId}
         handleToggleAutoPing={handleToggleAutoPing}
+        onConfigureAutoPingSchedule={setScheduleConnection}
         setSelectedConnectionsAutoPing={setSelectedConnectionsAutoPing}
         autoPingSaving={savingAutoPingConnectionId === "bulk"}
         autoPingSelection={autoPingSelection}
@@ -792,11 +807,28 @@ export default function ProviderDetailPage() {
         onCloseJsonModal={() => setActiveJsonConnection(null)}
       />
 
+      <XiaomiMimoAuthModal
+        isOpen={showXiaomiMimoModal}
+        onSuccess={handleOAuthSuccess}
+        onClose={() => setShowXiaomiMimoModal(false)}
+      />
+
       {providerId === "grok-cli" && (
         <BulkImportGrokCliModal
           isOpen={showBulkImportGrokCli}
           onClose={() => setShowBulkImportGrokCli(false)}
           onSuccess={fetchConnections}
+        />
+      )}
+
+      {scheduleConnection && (
+        <AutoPingScheduleModal
+          isOpen={!!scheduleConnection}
+          onClose={() => setScheduleConnection(null)}
+          connection={scheduleConnection}
+          reactive={autoPingConnections[scheduleConnection.id] === true}
+          schedule={autoPingSchedules?.[scheduleConnection.id] || null}
+          onSave={(result) => handleSaveAutoPing(scheduleConnection.id, result)}
         />
       )}
     </div>

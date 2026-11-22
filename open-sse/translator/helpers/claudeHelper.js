@@ -6,6 +6,20 @@ import { applyCloaking } from "../../utils/claudeCloaking.js";
 import { deriveSessionId } from "../../utils/sessionManager.js";
 import { isValidClaudeSignature } from "../../utils/claudeSignature.js";
 
+// Convert system reminder content blocks into text.
+export function systemReminderText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (typeof block === "string") return block;
+      if (block?.type === "text" && typeof block.text === "string") return block.text;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 // Check if message has valid non-empty content
 export function hasValidContent(msg) {
   if (typeof msg.content === "string" && msg.content.trim()) return true;

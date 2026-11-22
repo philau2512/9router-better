@@ -19,7 +19,7 @@ export function geminiToOpenAIResponse(chunk, state) {
   // Initialize state
   if (!state.messageId) {
     state.messageId = response.responseId || `msg_${Date.now()}`;
-    state.model = response.modelVersion || "gemini";
+    state.model = response.modelVersion || state.model || "gemini";
     state.functionIndex = 0;
     // Keep Gemini bookkeeping separate from the shared translator state.toolCalls map.
     // The downstream OpenAI→Claude translator uses state.toolCalls for Claude block
@@ -168,10 +168,10 @@ export function geminiToOpenAIResponse(chunk, state) {
             index: toolCallIndex,
             type: "function",
             function: { name: fcName, arguments: JSON.stringify(fcArgs) },
-            ...(thoughtSignature && { thought_signature: thoughtSignature }),
+            ...(thoughtSignature && { thought_signature: thoughtSignature, thoughtSignature }),
           };
           if (thoughtSignature) {
-            storeGeminiThoughtSignature(callId, thoughtSignature, state.sessionId);
+            storeGeminiThoughtSignature(callId, thoughtSignature, state.sessionId, state.model);
           }
           state.pendingThoughtSignature = null;
           state.geminiToolCallCount = (state.geminiToolCallCount || 0) + 1;
@@ -214,10 +214,10 @@ export function geminiToOpenAIResponse(chunk, state) {
           index: toolCallIndex,
           type: "function",
           function: { name: fcName, arguments: JSON.stringify(fcArgs) },
-          ...(thoughtSignature && { thought_signature: thoughtSignature }),
+          ...(thoughtSignature && { thought_signature: thoughtSignature, thoughtSignature }),
         };
         if (thoughtSignature) {
-          storeGeminiThoughtSignature(callId, thoughtSignature, state.sessionId);
+          storeGeminiThoughtSignature(callId, thoughtSignature, state.sessionId, state.model);
         }
         state.pendingThoughtSignature = null;
         state.geminiToolCallCount = (state.geminiToolCallCount || 0) + 1;

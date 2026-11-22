@@ -17,6 +17,8 @@ import {
   isAnthropicCompatibleProvider,
   getProviderAlias,
 } from "@/shared/constants/providers";
+import { parseSearchQuery, matchesSearch } from "@/shared/utils/modelSearchFilter";
+import { getDeactivatedProviderIds } from "@/shared/utils/connectionStatus";
 import {
   applyLiveCatalogToChips,
   parseProviderModelsPayload,
@@ -88,83 +90,143 @@ function parseModelDisplay(rawName, modelId, providerId) {
   };
 }
 
+// Providers with per-account live catalogs via /api/providers/[id]/models.
+// Static registry stays as fallback when live fetch fails or is empty.
+const LIVE_CATALOG_PROVIDERS = ["cursor", "cline", "clinepass"];
+
+// Fetch a provider's account-scoped catalog for every active connection and merge
+// the results. Entries collapse by model id on purpose: two connections of the
+// same provider produce the same picker value (`alias/id`), so keeping the first
+// avoids duplicate rows. There is no per-connection metadata to preserve beyond
+// {id,name}. Empty array means "nothing live" so callers keep the static fallback.
+function useLiveProviderModels(isOpen, connectionIds, label) {
+  const [models, setModels] = useState([]);
+  const idsKey = (connectionIds ?? []).join("|");
+
+  useEffect(() => {
+    const ids = idsKey ? idsKey.split("|") : [];
+    if (!isOpen || ids.length === 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    Promise.all(ids.map(async (connectionId) => {
+      const response = await fetch(`/api/providers/${connectionId}/models`, { cache: "no-store" });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return Array.isArray(data.models) ? data.models : [];
+    }))
+      .then((modelLists) => {
+        if (cancelled) return;
+        const seen = new Set();
+        setModels(modelLists.flat().filter((model) => {
+          if (!model?.id || seen.has(model.id)) return false;
+          seen.add(model.id);
+          return true;
+        }));
+      })
+      .catch((error) => {
+        // Do not hide the static fallback when the account catalog is unavailable.
+        console.warn(`Unable to load ${label} models for selector:`, error);
+        if (!cancelled) setModels([]);
+      });
+
+    return () => { cancelled = true; };
+  }, [isOpen, idsKey, label]);
+
+  return models;
+}
+
 export default function ModelSelectModal({
   isOpen,
   onClose,
   onSelect,
   onDeselect,
+  onSelectBatch,
+  onDeselectBatch,
   selectedModel,
   activeProviders = [],
   title = "Select Model",
+  size = "full",
   modelAliases = {},
   kindFilter = null,
   capFilter = null,
   addedModelValues = [],
   closeOnSelect = true,
+  allowProviderWildcard = false,
 }) {
-  // Drop disabled / delisted (e.g. iflow) / inactive custom connections before grouping.
-  const filteredActiveProviders = useMemo(
-    () =>
-      filterActiveProvidersForModelSelect(activeProviders, { kindFilter }),
-    [activeProviders, kindFilter],
-  );
+  // Live-fetched connections on modal open, fallback to activeProviders prop
+  const [fetchedConnections, setFetchedConnections] = useState(null);
+
+  const fetchConnections = async () => {
+    try {
+      const res = await fetch("/api/providers");
+      if (!res.ok) throw new Error(`Failed to fetch providers: ${res.status}`);
+      const data = await res.json();
+      setFetchedConnections(data.connections || []);
+    } catch (error) {
+      console.error("Error fetching providers in ModelSelectModal:", error);
+      setFetchedConnections([]);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) fetchConnections();
+  }, [isOpen]);
+
+  const effectiveConnections = useMemo(() => {
+    return fetchedConnections !== null ? fetchedConnections : (activeProviders || []);
+  }, [fetchedConnections, activeProviders]);
+
+  // Filter effectiveConnections by active state and serviceKinds when kindFilter set
+  const filteredActiveProviders = useMemo(() => {
+    const activeOnly = effectiveConnections.filter((p) => p && p.isActive !== false);
+    if (!kindFilter) return activeOnly;
+    return activeOnly.filter((p) => {
+      const info = AI_PROVIDERS[p.provider];
+      const kinds = info?.serviceKinds || ["llm"];
+      return kinds.includes(kindFilter);
+    });
+  }, [effectiveConnections, kindFilter]);
+
+  // Set of provider IDs that have connections configured, but ALL of them are deactivated (isActive === false)
+  const deactivatedProviderIds = useMemo(() => {
+    return getDeactivatedProviderIds(effectiveConnections);
+  }, [effectiveConnections]);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const [combos, setCombos] = useState([]);
   const [providerNodes, setProviderNodes] = useState([]);
   const [customModels, setCustomModels] = useState([]);
   const [disabledModels, setDisabledModels] = useState({});
+
   // null = live not settled yet (show static); object after settle (fail-open empty {})
   const [liveModelsByProviderId, setLiveModelsByProviderId] = useState(null);
   const [liveModelsLoading, setLiveModelsLoading] = useState(false);
-  const [cursorModels, setCursorModels] = useState([]);
   // vision/reasoning badges (eye/brain) for each model chip
   const { getCaps } = useModelCaps();
 
-  const cursorConnectionIds = useMemo(
-    () =>
-      activeProviders
-        .filter((provider) => provider.provider === "cursor" && provider.id)
-        .map((provider) => provider.id),
-    [activeProviders],
-  );
-
-  useEffect(() => {
-    if (!isOpen || cursorConnectionIds.length === 0) {
-      return undefined;
+  // Cursor and Cline expose the usable catalog per account, so the static catalog is
+  // kept only as a fallback: it goes stale quickly and entitlements differ per account.
+  // Single map driven by LIVE_CATALOG_PROVIDERS so the constant cannot drift
+  // from the memos below; per-provider arrays stay referentially stable unless
+  // filteredActiveProviders itself changes.
+  const liveConnectionIdsByProvider = useMemo(() => {
+    const map = Object.fromEntries(LIVE_CATALOG_PROVIDERS.map((id) => [id, []]));
+    for (const p of filteredActiveProviders) {
+      if (p?.id && Object.prototype.hasOwnProperty.call(map, p.provider)) map[p.provider].push(p.id);
     }
+    return map;
+  }, [filteredActiveProviders]);
+  const cursorConnectionIds = liveConnectionIdsByProvider.cursor;
+  const clineConnectionIds = liveConnectionIdsByProvider.cline;
+  const clinepassConnectionIds = liveConnectionIdsByProvider.clinepass;
 
-    let cancelled = false;
-    Promise.all(
-      cursorConnectionIds.map(async (connectionId) => {
-        const response = await fetch(`/api/providers/${connectionId}/models`, {
-          cache: "no-store",
-        });
-        if (!response.ok) return [];
-        const data = await response.json();
-        return Array.isArray(data.models) ? data.models : [];
-      }),
-    )
-      .then((modelLists) => {
-        if (cancelled) return;
-        const seen = new Set();
-        setCursorModels(
-          modelLists.flat().filter((model) => {
-            if (!model?.id || seen.has(model.id)) return false;
-            seen.add(model.id);
-            return true;
-          }),
-        );
-      })
-      .catch((error) => {
-        console.warn("Unable to load Cursor models for selector:", error);
-        if (!cancelled) setCursorModels([]);
-      });
+  const cursorModels = useLiveProviderModels(isOpen, cursorConnectionIds, "Cursor");
+  const clineModels = useLiveProviderModels(isOpen, clineConnectionIds, "Cline");
+  const clinepassModels = useLiveProviderModels(isOpen, clinepassConnectionIds, "ClinePass");
 
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, cursorConnectionIds]);
 
   const fetchCombos = useCallback(async () => {
     try {
@@ -310,6 +372,7 @@ export default function ModelSelectModal({
       "stt",
       "embedding",
       "imageToText",
+      "systemone",
     ]);
     // For these kinds, providers without hardcoded models can still be picked (provider-as-model fallback)
     const ALLOW_PROVIDER_FALLBACK_KINDS = new Set(["tts", "image", "webFetch"]);
@@ -336,17 +399,34 @@ export default function ModelSelectModal({
     const activeConnectionIds = filteredActiveProviders.map((p) => p.provider);
 
     // No-auth providers: filter by kindFilter as well
-    const noAuthIds = kindFilter
+    const noAuthIds = (kindFilter
       ? NO_AUTH_PROVIDER_IDS.filter((id) =>
           (AI_PROVIDERS[id]?.serviceKinds || ["llm"]).includes(kindFilter),
         )
-      : NO_AUTH_PROVIDER_IDS;
+      : NO_AUTH_PROVIDER_IDS).filter((id) => !deactivatedProviderIds.has(id));
+
+    // Compatible nodes (OpenAI/Anthropic Compatible) that already have user-added
+    // custom models should be selectable even without an API-key connection. Local /
+    // self-hosted endpoints (Ollama, internal relays, etc.) don't always need a stored
+    // key, so gating on connections hides models the user already added. These nodes
+    // are LLM-only, so only surface them when no kind filter is active.
+    const existingNodeIds = new Set((providerNodes || []).map((n) => n?.id).filter(Boolean));
+    const compatibleNodeIds = kindFilter
+      ? []
+      : customModels
+          .map((m) => m.providerAlias)
+          .filter((alias) =>
+            (isOpenAICompatibleProvider(alias) || isAnthropicCompatibleProvider(alias)) &&
+            existingNodeIds.has(alias) &&
+            !deactivatedProviderIds.has(alias)
+          );
 
     // Only show connected providers (including both standard and custom)
     const providerIdsToShow = new Set([
       ...activeConnectionIds, // Only connected providers
       ...noAuthIds, // No-auth providers (kind-filtered)
-    ]);
+      ...compatibleNodeIds, // Compatible nodes with user-added models
+    ].filter((id) => !deactivatedProviderIds.has(id)));
 
     // Sort by PROVIDER_ORDER
     const sortedProviderIds = [...providerIdsToShow].sort((a, b) => {
@@ -456,9 +536,9 @@ export default function ModelSelectModal({
         // Custom (openai/anthropic-compatible) providers are LLM-only — skip for typed media kinds
         if (kindFilter && TYPED_KINDS.has(kindFilter)) return;
         // Find connection object to get prefix synchronously without waiting for providerNodes fetch
-        const connection = activeProviders.find(
-          (p) => p.provider === providerId,
-        );
+        const connection =
+          filteredActiveProviders.find((p) => p.provider === providerId) ||
+          effectiveConnections.find((p) => p.provider === providerId);
         const matchedNode = providerNodes.find(
           (node) => node.id === providerId,
         );
@@ -531,8 +611,9 @@ export default function ModelSelectModal({
           hasModels: modelsToShow.some((m) => !m.isPlaceholder),
         };
       } else {
-        const hardcodedModels = providerId === "cursor" && cursorModels.length > 0
-          ? cursorModels
+        const liveModels = providerId === "cursor" ? cursorModels : providerId === "cline" ? clineModels : providerId === "clinepass" ? clinepassModels : [];
+        const hardcodedModels = liveModels.length > 0
+          ? liveModels
           : getModelsByProviderId(providerId);
         const hardcodedIds = new Set(hardcodedModels.map((m) => m.id));
 
@@ -647,6 +728,28 @@ export default function ModelSelectModal({
       if (group.models.length === 0) delete groups[providerId];
     });
 
+    // Filter by enabledModels if explicitly configured on any active connection for this provider
+    Object.entries(groups).forEach(([providerId, group]) => {
+      const providerConns = filteredActiveProviders.filter((p) => p.provider === providerId);
+      const explicitEnabled = [];
+      for (const conn of providerConns) {
+        if (Array.isArray(conn.providerSpecificData?.enabledModels) && conn.providerSpecificData.enabledModels.length > 0) {
+          explicitEnabled.push(...conn.providerSpecificData.enabledModels);
+        }
+      }
+      if (explicitEnabled.length > 0) {
+        const enabledSet = new Set(explicitEnabled);
+        const alias = group.alias || getProviderAlias(providerId) || providerId;
+        group.models = group.models.filter((m) =>
+          enabledSet.has(m.id) ||
+          enabledSet.has(m.value) ||
+          enabledSet.has(`${alias}/${m.id}`) ||
+          (m.value && enabledSet.has(m.value.replace(`${alias}/`, "")))
+        );
+        if (group.models.length === 0) delete groups[providerId];
+      }
+    });
+
     return groups;
   }, [
     filteredActiveProviders,
@@ -659,15 +762,19 @@ export default function ModelSelectModal({
     activeProviders,
     liveModelsByProviderId,
     cursorModels,
+    clineModels,
+    clinepassModels,
   ]);
+
+  // Parse search query into structured search terms / regex
+  const parsedQuery = useMemo(() => parseSearchQuery(searchQuery), [searchQuery]);
 
   // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
   const filteredCombos = useMemo(() => {
     if (kindFilter || capFilter) return [];
-    if (!searchQuery.trim()) return combos;
-    const query = searchQuery.toLowerCase();
-    return combos.filter((c) => c.name.toLowerCase().includes(query));
-  }, [combos, searchQuery, kindFilter, capFilter]);
+    if (parsedQuery.isEmpty) return combos;
+    return combos.filter((c) => matchesSearch(c, parsedQuery));
+  }, [combos, parsedQuery, kindFilter, capFilter]);
 
   // Sort models alphabetically, with added models floated to top
   const sortModels = useCallback(
@@ -683,43 +790,8 @@ export default function ModelSelectModal({
     [addedModelValues],
   );
 
-  // Normalize for search: "openrouter_gpt_4" / "gpt-4" → comparable tokens
-  const normalizeSearchText = useCallback((text) => {
-    return String(text || "")
-      .toLowerCase()
-      .replace(/[/_.:-]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }, []);
-
-  const modelMatchesQuery = useCallback(
-    (model, query, normalizedQuery) => {
-      if (!query) return true;
-      const name = String(model?.name || "").toLowerCase();
-      const id = String(model?.id || "").toLowerCase();
-      const value = String(model?.value || "").toLowerCase();
-      // Exact substring on raw fields (covers live-fetched ids / full alias paths)
-      if (
-        name.includes(query) ||
-        id.includes(query) ||
-        value.includes(query)
-      ) {
-        return true;
-      }
-      // Soft match: ignore _ - / separators so "gpt 4" hits openrouter_gpt_4_o
-      const soft = normalizeSearchText(
-        [model?.name, model?.id, model?.value].filter(Boolean).join(" "),
-      );
-      return soft.includes(normalizedQuery);
-    },
-    [normalizeSearchText],
-  );
-
   // Filter models by search query (static + live chips share the same fields)
   const filteredGroups = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    const normalizedQuery = normalizeSearchText(query);
-
     const filtered = {};
     Object.entries(groupedModels).forEach(([providerId, group]) => {
       let models = group.models;
@@ -755,19 +827,11 @@ export default function ModelSelectModal({
 
       if (models.length === 0) return;
 
-      if (query) {
-        const providerNameMatches =
-          group.name.toLowerCase().includes(query) ||
-          normalizeSearchText(group.name).includes(normalizedQuery);
-        const aliasMatches =
-          String(group.alias || "")
-            .toLowerCase()
-            .includes(query) ||
-          normalizeSearchText(group.alias).includes(normalizedQuery);
+      if (!parsedQuery.isEmpty) {
+        const providerNameMatches = matchesSearch(group.name, parsedQuery);
+        const aliasMatches = group.alias ? matchesSearch(group.alias, parsedQuery) : false;
 
-        const matched = models.filter((m) =>
-          modelMatchesQuery(m, query, normalizedQuery),
-        );
+        const matched = models.filter((m) => matchesSearch(m, parsedQuery));
 
         if (matched.length > 0) {
           models = matched;
@@ -787,14 +851,46 @@ export default function ModelSelectModal({
     return filtered;
   }, [
     groupedModels,
-    searchQuery,
+    parsedQuery,
     sortModels,
-    normalizeSearchText,
-    modelMatchesQuery,
     capFilter,
     activeFilter,
     getCaps,
   ]);
+
+  const visibleModels = useMemo(() => {
+    const comboModels = filteredCombos.map((c) => ({ value: c.name, name: c.name, id: c.name }));
+    const providerModels = Object.values(filteredGroups).flatMap((g) => g.models.filter((m) => !m.isPlaceholder));
+    return [...comboModels, ...providerModels];
+  }, [filteredCombos, filteredGroups]);
+
+  const visibleAdded = useMemo(() => {
+    const addedSet = new Set(addedModelValues);
+    return visibleModels.filter((m) => addedSet.has(m.value));
+  }, [visibleModels, addedModelValues]);
+
+  const visibleUnadded = useMemo(() => {
+    const addedSet = new Set(addedModelValues);
+    return visibleModels.filter((m) => !addedSet.has(m.value));
+  }, [visibleModels, addedModelValues]);
+
+  const handleSelectAllVisible = () => {
+    if (visibleUnadded.length === 0) return;
+    if (onSelectBatch) {
+      onSelectBatch(visibleUnadded);
+    } else {
+      visibleUnadded.forEach((m) => onSelect(m));
+    }
+  };
+
+  const handleDeselectAllVisible = () => {
+    if (visibleAdded.length === 0) return;
+    if (onDeselectBatch) {
+      onDeselectBatch(visibleAdded);
+    } else if (onDeselect) {
+      visibleAdded.forEach((m) => onDeselect(m));
+    }
+  };
 
   const handleSelect = (model) => {
     const value = model?.value || model?.name || model;
@@ -830,7 +926,7 @@ export default function ModelSelectModal({
       isOpen={isOpen}
       onClose={handleModalClose}
       title={title}
-      size="full"
+      size={size}
       className="p-4! max-h-[94vh]"
       footer={null}
     >
@@ -910,13 +1006,72 @@ export default function ModelSelectModal({
           </span>
           <input
             type="text"
-            placeholder="Search models, ids, or providers…"
+            placeholder={
+              allowProviderWildcard
+                ? "Search models (e.g. claude -haiku, oc/*, /regex/)..."
+                : "Search models (e.g. claude -haiku, !embed, /regex/)..."
+            }
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             autoFocus
-            className="w-full pl-10 pr-3 py-2 bg-surface border border-border rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+            className="w-full pl-10 pr-24 py-2 bg-surface border border-border rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
           />
+          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            {parsedQuery.isRegex && (
+              <span className="text-[10px] px-1 py-0.2 rounded bg-primary/10 text-primary font-mono font-medium">
+                regex
+              </span>
+            )}
+            {parsedQuery.negativeTerms.length > 0 && !parsedQuery.isRegex && (
+              <span className="text-[10px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-500 font-mono font-medium">
+                !exclude
+              </span>
+            )}
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="text-text-muted hover:text-text-main cursor-pointer p-0.5 rounded"
+                title="Clear search"
+              >
+                <span className="material-symbols-outlined text-[14px] leading-none">close</span>
+              </button>
+            )}
+          </div>
         </div>
+
+        {!closeOnSelect && visibleModels.length > 0 && (
+          <div className="flex items-center justify-between px-1 text-[11px] text-text-muted mt-2">
+            <span className="flex items-center gap-1.5">
+              <span>{visibleModels.length} models</span>
+              {addedModelValues.length > 0 && (
+                <span className="text-primary font-medium">({addedModelValues.length} selected)</span>
+              )}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {visibleUnadded.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleSelectAllVisible}
+                  className="px-2 py-0.5 rounded text-[11px] font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors cursor-pointer"
+                  title="Select all filtered models"
+                >
+                  Select All ({visibleUnadded.length})
+                </button>
+              )}
+              {visibleAdded.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleDeselectAllVisible}
+                  className="px-2 py-0.5 rounded text-[11px] font-medium bg-border/40 text-text-muted hover:text-text-main hover:bg-border/60 transition-colors cursor-pointer"
+                  title="Deselect all filtered models"
+                >
+                  Deselect All ({visibleAdded.length})
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Quick Filter Tabs */}
@@ -1039,26 +1194,51 @@ export default function ModelSelectModal({
         )}
 
         {/* Provider models */}
-        {Object.entries(filteredGroups).map(([providerId, group]) => (
-          <div key={providerId} id={`provider-section-${providerId}`}>
-            {/* Provider header */}
-            <div className="flex items-center gap-1.5 mb-2 sticky top-0 bg-surface/95 backdrop-blur-xs py-1 z-10">
-              <ProviderIcon
-                src={`/providers/${providerId}.png`}
-                alt={group.name}
-                size={14}
-                fallbackText={(group.name || providerId)
-                  .slice(0, 2)
-                  .toUpperCase()}
-                fallbackColor={group.color}
-              />
-              <span className="text-xs font-semibold text-primary">
-                {group.name}
-              </span>
-              <span className="text-[10px] text-text-muted">
-                ({group.models.length})
-              </span>
-            </div>
+        {Object.entries(filteredGroups).map(([providerId, group]) => {
+          const wildcardValue = `${group.alias || providerId}/*`;
+          const isWildcardAdded = allowProviderWildcard && addedModelValues.includes(wildcardValue);
+
+          return (
+            <div key={providerId} id={`provider-section-${providerId}`}>
+              {/* Provider header */}
+              <div className="flex items-center gap-1.5 mb-2 sticky top-0 bg-surface/95 backdrop-blur-xs py-1 z-10">
+                <ProviderIcon
+                  src={`/providers/${providerId}.png`}
+                  alt={group.name}
+                  size={14}
+                  fallbackText={(group.name || providerId)
+                    .slice(0, 2)
+                    .toUpperCase()}
+                  fallbackColor={group.color}
+                />
+                {allowProviderWildcard ? (
+                  <button
+                    type="button"
+                    onClick={() => handleSelect({ value: wildcardValue, name: wildcardValue })}
+                    title={isWildcardAdded ? `Click to remove wildcard ${wildcardValue}` : `Click to allow all models from ${group.name} (${wildcardValue})`}
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium transition-all cursor-pointer border ${
+                      isWildcardAdded
+                        ? "bg-primary text-white border-primary shadow-2xs hover:bg-primary-hover"
+                        : "text-primary border-transparent hover:bg-primary/10 hover:border-primary/20"
+                    }`}
+                  >
+                    {isWildcardAdded && (
+                      <span className="material-symbols-outlined leading-none text-[12px]">check</span>
+                    )}
+                    <span>{group.name}</span>
+                    <span className={`text-[10px] font-mono px-1 py-0.2 rounded ${isWildcardAdded ? "bg-white/20 text-white" : "text-text-muted bg-sidebar border border-border/50"}`}>
+                      {wildcardValue}
+                    </span>
+                  </button>
+                ) : (
+                  <span className="text-xs font-semibold text-primary">
+                    {group.name}
+                  </span>
+                )}
+                <span className="text-[10px] text-text-muted">
+                  ({group.models.length})
+                </span>
+              </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
               {group.models.map((model) => {
@@ -1159,7 +1339,8 @@ export default function ModelSelectModal({
               })}
             </div>
           </div>
-        ))}
+        );
+        })}
 
         {Object.keys(filteredGroups).length === 0 &&
           filteredCombos.length === 0 && (
@@ -1180,6 +1361,8 @@ ModelSelectModal.propTypes = {
   onClose: PropTypes.func.isRequired,
   onSelect: PropTypes.func.isRequired,
   onDeselect: PropTypes.func,
+  onSelectBatch: PropTypes.func,
+  onDeselectBatch: PropTypes.func,
   selectedModel: PropTypes.string,
   activeProviders: PropTypes.arrayOf(
     PropTypes.shape({
@@ -1187,8 +1370,10 @@ ModelSelectModal.propTypes = {
     }),
   ),
   title: PropTypes.string,
+  size: PropTypes.string,
   modelAliases: PropTypes.object,
   kindFilter: PropTypes.string,
   addedModelValues: PropTypes.arrayOf(PropTypes.string),
   closeOnSelect: PropTypes.bool,
+  allowProviderWildcard: PropTypes.bool,
 };

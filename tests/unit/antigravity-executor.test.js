@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("open-sse/utils/proxyFetch.js", () => ({
+  proxyAwareFetch: vi.fn(),
+}));
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: vi.fn(),
 }));
@@ -8,6 +11,9 @@ import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
 import { AntigravityExecutor } from "../../open-sse/executors/antigravity.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
+import { generateProjectId as generateProjectIdHelper } from "../../open-sse/translator/helpers/geminiHelper.js";
+import { generateProjectId as generateProjectIdFormat } from "../../open-sse/translator/formats/gemini.js";
+import "../translator/registerAll.js";
 import {
   ANTIGRAVITY_BASE_URLS,
 } from "../../open-sse/providers/antigravity-provider-metadata.js";
@@ -32,6 +38,17 @@ describe("AntigravityExecutor", () => {
   });
 
   afterEach(() => vi.useRealTimers());
+
+  it("uses deterministic fallback project ID when credentials lack explicit projectId", () => {
+    const executor = new AntigravityExecutor();
+    const credsWithoutProject = { accessToken: "ag-token", connectionId: "conn-stable-xyz" };
+    const req1 = executor.transformRequest("gemini-3-flash-agent", body, true, credsWithoutProject);
+    const req2 = executor.transformRequest("gemini-3-flash-agent", body, true, credsWithoutProject);
+
+    expect(req1.project).toBe(req2.project);
+    expect(typeof req1.project).toBe("string");
+    expect(req1.project.length).toBeGreaterThan(0);
+  });
 
   it("builds production-first URLs and forces image generation to non-streaming", () => {
     const executor = new AntigravityExecutor();
@@ -104,7 +121,12 @@ describe("AntigravityExecutor", () => {
       model: "gemini-3.1-flash-image",
       requestType: "image_gen",
       request: {
-        contents: [{ role: "user", parts: [{ text: "draw" }] }],
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: "draw" }, { inlineData: { data: "ignored" } }],
+          },
+        ],
         generationConfig: { imageConfig: { aspectRatio: "16:9" } },
       },
     });
@@ -321,5 +343,91 @@ describe("AntigravityExecutor", () => {
         }),
       ),
     ).toMatchObject({ status: 429, resetsAtMs: Date.parse("2026-07-16T01:00:00Z") });
+  });
+
+  it("generateProjectId generates valid deterministic project ID with crypto.createHash", () => {
+    const seed = "33327892";
+    const resHelper1 = generateProjectIdHelper(seed);
+    const resHelper2 = generateProjectIdHelper(seed);
+    expect(resHelper1).toBe(resHelper2);
+    expect(resHelper1).toMatch(/^[a-z]+-[a-z]+-[a-f0-9]{5}$/);
+
+    const resFormat1 = generateProjectIdFormat(seed);
+    const resFormat2 = generateProjectIdFormat(seed);
+    expect(resFormat1).toBe(resFormat2);
+    expect(resFormat1).toBe(resHelper1);
+
+    const randomHelper = generateProjectIdHelper();
+    expect(randomHelper).toMatch(/^[a-z]+-[a-z]+-[a-f0-9]{5}$/);
+
+    const randomFormat = generateProjectIdFormat();
+    expect(randomFormat).toMatch(/^[a-z]+-[a-z]+-[a-f0-9]{5}$/);
+  });
+
+  it("translates OpenAI request to Antigravity with fallback project ID without error", () => {
+    const openaiPayload = {
+      messages: [{ role: "user", content: "hello" }],
+    };
+    const translated = translateRequest(
+      FORMATS.OPENAI,
+      FORMATS.ANTIGRAVITY,
+      "gemini-3-flash-agent",
+      openaiPayload,
+      true,
+      { connectionId: "33327892" },
+      "antigravity",
+    );
+
+    expect(translated.project).toMatch(/^[a-z]+-[a-z]+-[a-f0-9]{5}$/);
+    expect(translated.project).toBe(generateProjectIdHelper("33327892"));
+  });
+
+  it("includes enabledCreditTypes GOOGLE_ONE_AI in standard transformed request", () => {
+    const executor = new AntigravityExecutor();
+    const transformed = executor.transformRequest(
+      "gemini-3.7-flash",
+      body,
+      true,
+      credentials,
+    );
+    expect(transformed.enabledCreditTypes).toEqual(["GOOGLE_ONE_AI"]);
+  });
+
+  it("attaches Anthropic-Beta header for Claude models via Antigravity", () => {
+    const executor = new AntigravityExecutor();
+    const headers = executor.buildHeaders(credentials, true, "sess-1", "claude-sonnet-4-6");
+    expect(headers["Anthropic-Beta"]).toBe(
+      "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+    );
+
+    const nonClaudeHeaders = executor.buildHeaders(credentials, true, "sess-1", "gemini-3.7-flash");
+    expect(nonClaudeHeaders["Anthropic-Beta"]).toBeUndefined();
+  });
+
+  it("falls back to the next endpoint when an endpoint returns HTTP 404 NOT_FOUND", async () => {
+    const executor = new AntigravityExecutor();
+    proxyAwareFetch
+      .mockResolvedValueOnce({
+        status: 404,
+        headers: new Headers(),
+        text: async () => JSON.stringify({ error: { code: 404, message: "Requested entity was not found." } }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: new Headers(),
+        text: async () => "ok",
+      });
+
+    const result = await executor.execute({
+      model: "gemini-3.7-flash",
+      body,
+      stream: true,
+      credentials,
+      log,
+    });
+
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(2);
+    expect(result.response.status).toBe(200);
+    expect(result.url).toBe(`${ANTIGRAVITY_BASE_URLS[1]}/v1internal:streamGenerateContent?alt=sse`);
   });
 });

@@ -51,6 +51,8 @@ export default function APIPageClient({ machineId }) {
     maskKey,
     toggleKeyVisibility,
     confirmPauseKey,
+    handleUpdateKeyAccess,
+    confirmRestrictKey,
   } = apiKeys;
 
   const {
@@ -192,6 +194,8 @@ export default function APIPageClient({ machineId }) {
         onToggleKey={handleToggleKey}
         onDeleteKey={handleDeleteKey}
         maskKey={maskKey}
+        onUpdateKeyAccess={handleUpdateKeyAccess}
+        onRequestRestrictKey={confirmRestrictKey}
       />
 
       <ApiKeyModals
@@ -214,6 +218,7 @@ export default function APIPageClient({ machineId }) {
       />
 
       <RemoteAccessModals remoteAccess={remoteAccess} tsLogRef={tsLogRef} />
+
 
       <ConfirmModal
         isOpen={!!confirmState}

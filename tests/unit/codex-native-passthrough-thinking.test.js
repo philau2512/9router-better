@@ -5,6 +5,12 @@ const { executeMock, forcedSSEToJsonMock } = vi.hoisted(() => ({
   forcedSSEToJsonMock: vi.fn(),
 }));
 
+vi.mock("open-sse/executors/index.js", () => ({
+  getExecutor: () => ({
+    noAuth: true,
+    execute: executeMock,
+  }),
+}));
 vi.mock("../../open-sse/executors/index.js", () => ({
   getExecutor: () => ({
     noAuth: true,

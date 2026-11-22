@@ -15,14 +15,17 @@ import {
   getModelAliases,
 } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
-import { resolveQoderModels } from "open-sse/services/qoderModels.js";
+
+import { resolveQoderModels, routableQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveOpenCodeModels } from "open-sse/services/opencodeModels.js";
 import { resolveCopilotModels } from "open-sse/services/copilotModels.js";
-import { resolveClinepassModels } from "open-sse/services/clinepassModels.js";
+import { resolveClinepassModels, resolveClineModels } from "open-sse/services/clinepassModels.js";
 import { resolveCodexModels } from "open-sse/services/codexModels.js";
 import { resolveAntigravityModels } from "open-sse/services/antigravityModels.js";
+
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
@@ -72,14 +75,19 @@ const LIVE_MODEL_RESOLVERS = {
   qoder: async (conn) => {
     const result = await resolveQoderModels({
       accessToken: conn.accessToken,
+      // PAT (pt-...) connections keep the token in apiKey; without it the live
+      // catalog silently fails and /v1/models falls back to the static list.
+      apiKey: conn.apiKey,
       refreshToken: conn.refreshToken,
       email: conn.email,
       displayName: conn.displayName,
       providerSpecificData: conn.providerSpecificData || {},
     });
-    return result?.models?.length
-      ? { models: result.models.map((model) => ({ id: model.id, name: model.name })) }
-      : null;
+
+    // Visible + hidden (enable:false) catalog keys — chat routes all of them.
+    const models = routableQoderModels(result);
+    if (!models.length) return null;
+    return { models: models.map((m) => ({ id: m.id, name: m.name })) };
   },
   kimchi: async (conn) => {
     const result = await resolveKimchiModels(
@@ -141,6 +149,7 @@ const LIVE_MODEL_RESOLVERS = {
     });
     return result?.models?.length ? { models: result.models } : null;
   },
+
   // Codex (OpenAI) — live catalog from chatgpt.com/backend-api/codex/models.
   // Falls back to static PROVIDER_MODELS["cx"] on any failure (resolver → null).
   codex: async (conn) => {
@@ -154,6 +163,26 @@ const LIVE_MODEL_RESOLVERS = {
         connectionId: conn.id,
       },
       { log: console, proxyOptions: resolvedProxy },
+    );
+    return result?.models?.length ? { models: result.models } : null;
+  },
+  cline: async (conn) => {
+    const result = await resolveClineModels({
+      accessToken: conn.accessToken,
+      apiKey: conn.apiKey,
+    });
+    return result?.models?.length ? { models: result.models } : null;
+  },
+  "grok-cli": async (conn) => {
+    const proxyOptions = await resolveConnectionProxyConfig(
+      conn.providerSpecificData || {},
+    );
+    const result = await resolveGrokCliModels(
+      { ...conn, connectionId: conn.id },
+      {
+        log: console,
+        proxyOptions,
+      },
     );
     return result?.models?.length ? { models: result.models } : null;
   },
@@ -205,6 +234,10 @@ const parseOpenAIStyleModels = (data) => {
 
 // Matches provider IDs that are upstream/cross-instance connections (contain a UUID suffix)
 const UPSTREAM_CONNECTION_RE = /[-_][0-9a-f]{8,}$/i;
+
+// Header sent by fetchCompatibleModelIds to detect cross-instance /models fetches
+// and break recursive loops between 9router instances connected to each other.
+const INTERNAL_MODELS_FETCH_HEADER = "x-9r-internal-models-fetch";
 
 // LLM kind sentinel — combos/models with no explicit kind default to LLM
 const LLM_KIND = "llm";
@@ -413,6 +446,52 @@ export async function buildModelsList(kindFilter) {
         models.push({
           id: `${alias}/${model.id}`,
           object: "model",
+          owned_by: alias,
+        });
+      }
+    }
+
+    for (const [providerId, providerInfo] of Object.entries(AI_PROVIDERS)) {
+      if (!providerMatchesKinds(providerId, kindFilter)) continue;
+      const alias = getProviderAlias(providerId) || PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+      const subConfigModels = [];
+      if (
+        kindFilter.includes("tts") &&
+        Array.isArray(providerInfo?.ttsConfig?.models)
+      ) {
+        for (const m of providerInfo.ttsConfig.models) {
+          if (m?.id) subConfigModels.push(m.id);
+        }
+      }
+      if (
+        kindFilter.includes("embedding") &&
+        Array.isArray(providerInfo?.embeddingConfig?.models)
+      ) {
+        for (const m of providerInfo.embeddingConfig.models) {
+          if (m?.id) subConfigModels.push(m.id);
+        }
+      }
+      for (const subId of subConfigModels) {
+        if (isDisabled(alias, subId)) continue;
+        models.push({
+          id: `${alias}/${subId}`,
+          object: "model",
+          owned_by: alias,
+        });
+      }
+      if (kindFilter.includes("webSearch") && providerInfo?.searchConfig) {
+        models.push({
+          id: `${alias}/search`,
+          object: "model",
+          kind: "webSearch",
+          owned_by: alias,
+        });
+      }
+      if (kindFilter.includes("webFetch") && providerInfo?.fetchConfig) {
+        models.push({
+          id: `${alias}/fetch`,
+          object: "model",
+          kind: "webFetch",
           owned_by: alias,
         });
       }
@@ -672,7 +751,8 @@ export async function OPTIONS() {
  */
 export async function GET(request) {
   try {
-    const models = await buildModelsList([LLM_KIND]);
+    const skipDynamicFetch = request?.headers?.get(INTERNAL_MODELS_FETCH_HEADER) === "1";
+    const models = await buildModelsList([LLM_KIND], { skipDynamicFetch });
     const { error, data } = await filterModelsForApiKey(request, models);
     if (error) {
       return Response.json(
@@ -680,8 +760,12 @@ export async function GET(request) {
         { status: error.status, headers: { "Access-Control-Allow-Origin": "*" } },
       );
     }
+    const filteredData = await filterModelsListForKey(
+      await getKeyAccessContext(request),
+      data
+    );
     return Response.json(
-      { object: "list", data },
+      { object: "list", data: filteredData },
       {
         headers: { "Access-Control-Allow-Origin": "*" },
       },

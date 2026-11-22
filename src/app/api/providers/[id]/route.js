@@ -5,6 +5,10 @@ import {
   updateProviderConnection,
   deleteProviderConnection,
 } from "@/models";
+import {
+  toProviderConnectionResponse,
+  usesAwsCredentialForm,
+} from "@/lib/providerConnectionResponse";
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -93,14 +97,9 @@ export async function GET(request, { params }) {
       );
     }
 
-    // Hide sensitive fields
-    const result = { ...connection };
-    delete result.apiKey;
-    delete result.accessToken;
-    delete result.refreshToken;
-    delete result.idToken;
-
-    return NextResponse.json({ connection: result });
+    return NextResponse.json({
+      connection: toProviderConnectionResponse(connection),
+    });
   } catch (error) {
     console.log("Error fetching connection:", error);
     return NextResponse.json(
@@ -175,10 +174,20 @@ export async function PUT(request, { params }) {
         proxyPoolResult.hasProxyPoolField,
       )
     ) {
+      const incomingProviderSpecificData = { ...(providerSpecificData || {}) };
+      const isAwsCredential = usesAwsCredentialForm(existing.provider);
+      // The edit form cannot read the stored token back. An empty password field means
+      // keep the saved credential; null explicitly removes it.
+      if (isAwsCredential && incomingProviderSpecificData.sessionToken === "") {
+        delete incomingProviderSpecificData.sessionToken;
+      }
       updateData.providerSpecificData = {
         ...(existing.providerSpecificData || {}),
-        ...(providerSpecificData || {}),
+        ...incomingProviderSpecificData,
       };
+      if (isAwsCredential && incomingProviderSpecificData.sessionToken === null) {
+        delete updateData.providerSpecificData.sessionToken;
+      }
 
       if (proxyConfig.hasAnyProxyField) {
         updateData.providerSpecificData.connectionProxyEnabled =
@@ -201,14 +210,9 @@ export async function PUT(request, { params }) {
 
     const updated = await updateProviderConnection(id, updateData);
 
-    // Hide sensitive fields
-    const result = { ...updated };
-    delete result.apiKey;
-    delete result.accessToken;
-    delete result.refreshToken;
-    delete result.idToken;
-
-    return NextResponse.json({ connection: result });
+    return NextResponse.json({
+      connection: toProviderConnectionResponse(updated),
+    });
   } catch (error) {
     console.log("Error updating connection:", error);
     return NextResponse.json(

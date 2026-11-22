@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import {
@@ -54,6 +55,8 @@ function ensureGeminiOutputFloor(generationConfig, floor) {
     generationConfig.maxOutputTokens = floor;
   }
 }
+import { ROLE, GEMINI_ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { isGemini4Model } from "../../providers/capabilities.js";
 
 // Sanitize function names for Gemini API.
 // Gemini requires: starts with [a-zA-Z_], followed by [a-zA-Z0-9_.:\-], max 64 chars.
@@ -68,6 +71,32 @@ function sanitizeGeminiFunctionName(name) {
   }
   // Truncate to 64 chars
   return sanitized.substring(0, 64);
+}
+
+/**
+ * Rewrites duplicate tool_call_ids so every emitted functionCall id is unique.
+ *
+ * Gemini validates functionCall id uniqueness across the WHOLE history and
+ * answers 400 INVALID_ARGUMENT otherwise, but an OpenAI tool_call_id is only
+ * unique within its own assistant turn — a long agent session can replay the
+ * same id in a later turn (#4532).
+ */
+function createToolCallIdUniquifier() {
+  const used = new Set();
+  return {
+    next(id) {
+      if (!id) return id;
+      if (!used.has(id)) {
+        used.add(id);
+        return id;
+      }
+      let n = 2;
+      let candidate = `${id}-${n}`;
+      while (used.has(candidate)) candidate = `${id}-${n++}`;
+      used.add(candidate);
+      return candidate;
+    },
+  };
 }
 
 function contentHasFunctionResponse(content) {
@@ -91,26 +120,65 @@ function resolveThoughtSignature(toolCall, fallback) {
   return typeof sig === "string" && sig.length > 0 ? sig : fallback;
 }
 
+// Gemini 4 rejects a merged user turn whose last part is not a functionResponse (#4802)
+function moveFunctionResponsesLast(parts) {
+  const responses = parts.filter((p) => p.functionResponse);
+  if (!responses.length) return parts;
+  return [...parts.filter((p) => !p.functionResponse), ...responses];
+}
+
 // Upstream fix from open-sse commit 8d1db46be
 // Merge adjacent same-role blocks and strip empty parts before sending to
 // Gemini, avoiding 400 INVALID_ARGUMENT on consecutive same-role messages.
 // Do NOT merge functionResponse turns with follow-up user text — that shape
 // triggers empty STOP on Antigravity/Gemini tool loops.
-function normalizeGeminiContents(contents) {
+function normalizeGeminiContents(contents, model = null) {
+  const frLast = isGemini4Model(model);
   const out = [];
   for (const c of contents || []) {
     if (!c?.role || !Array.isArray(c.parts) || c.parts.length === 0) continue;
+    const parts = c.parts.filter((p) => p && Object.keys(p).length > 0);
+    if (parts.length === 0) continue;
     const last = out.at(-1);
     if (last?.role === c.role) {
-      const mixedFrAndText =
-        (contentHasFunctionResponse(last) && contentHasPlainText(c)) ||
-        (contentHasPlainText(last) && contentHasFunctionResponse(c));
-      if (!mixedFrAndText) {
-        last.parts.push(...c.parts);
+      if (contentHasFunctionResponse(last) && contentHasPlainText(c)) {
+        // Embed user follow-up text into the function response data instead of
+        // inserting a synthetic model turn (which pollutes conversation history
+        // and causes the model to mimic dummy acknowledgements and stop).
+        const textParts = c.parts.filter(p => typeof p?.text === "string" && p.text.length > 0);
+        const combinedText = textParts.map(p => p.text).join("\n\n");
+        const frParts = last.parts.filter(p => p.functionResponse);
+        const targetFr = frParts.at(-1)?.functionResponse;
+        if (targetFr && combinedText) {
+          if (typeof targetFr.response === "object" && targetFr.response !== null) {
+            targetFr.response.user_instruction = combinedText;
+          } else {
+            targetFr.response = { result: targetFr.response, user_instruction: combinedText };
+          }
+        }
         continue;
       }
+      if (contentHasPlainText(last) && contentHasFunctionResponse(c)) {
+        const textParts = last.parts.filter(p => typeof p?.text === "string" && p.text.length > 0);
+        const combinedText = textParts.map(p => p.text).join("\n\n");
+        const frParts = c.parts.filter(p => p.functionResponse);
+        const targetFr = frParts.at(-1)?.functionResponse;
+        if (targetFr && combinedText) {
+          if (typeof targetFr.response === "object" && targetFr.response !== null) {
+            targetFr.response.user_instruction = combinedText;
+          } else {
+            targetFr.response = { result: targetFr.response, user_instruction: combinedText };
+          }
+        }
+        last.parts = frParts;
+        continue;
+      }
+      last.parts.push(...parts);
+      if (frLast) last.parts = moveFunctionResponsesLast(last.parts);
+      continue;
     }
-    out.push({ ...c, parts: [...c.parts] });
+    const finalParts = frLast && c.role === "user" ? moveFunctionResponsesLast(parts) : parts;
+    out.push({ ...c, parts: [...finalParts] });
   }
   return out;
 }
@@ -130,14 +198,15 @@ function openaiToGeminiBase(
     safetySettings: DEFAULT_SAFETY_SETTINGS,
   };
 
-  // Generation config
-  if (body.temperature !== undefined) {
+  // Generation config — Gemini 4 removed the sampling params, forwarding them fails the request
+  const allowSampling = !isGemini4Model(model);
+  if (allowSampling && body.temperature !== undefined) {
     result.generationConfig.temperature = body.temperature;
   }
-  if (body.top_p !== undefined) {
+  if (allowSampling && body.top_p !== undefined) {
     result.generationConfig.topP = body.top_p;
   }
-  if (body.top_k !== undefined) {
+  if (allowSampling && body.top_k !== undefined) {
     result.generationConfig.topK = body.top_k;
   }
   if (body.max_tokens !== undefined) {
@@ -163,10 +232,12 @@ function openaiToGeminiBase(
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       if (msg.role === "tool" && msg.tool_call_id) {
-        toolResponses[msg.tool_call_id] = msg.content;
+        (toolResponses[msg.tool_call_id] ||= []).push(msg.content);
       }
     }
   }
+  const toolResponseCursor = {};
+  const toolCallIdUniquifier = createToolCallIdUniquifier();
 
   // Convert messages
   if (body.messages && Array.isArray(body.messages)) {
@@ -219,56 +290,75 @@ function openaiToGeminiBase(
         }
 
         if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
-          const toolCallIds = [];
+          const toolCallsList = [];
           let firstFunctionCallSeen = false;
           for (const tc of msg.tool_calls) {
             if (tc.type !== "function") continue;
 
+            const fnName = tc.function?.name || "";
+            const sanitizedName = sanitizeGeminiFunctionName(fnName);
             const args = tryParseJSON(tc.function?.arguments || "{}");
             const cachedSignature = tc.id
-              ? getGeminiThoughtSignatureSync(tc.id, sessionId)
+              ? getGeminiThoughtSignatureSync(tc.id, sessionId, model)
               : null;
             const callSignature =
               resolveThoughtSignature(tc, cachedSignature) ||
               (!firstFunctionCallSeen ? signature : undefined);
             firstFunctionCallSeen = true;
+            const emitId = toolCallIdUniquifier.next(tc.id);
             const part = {
               functionCall: {
-                id: tc.id,
-                name: sanitizeGeminiFunctionName(tc.function.name),
+                id: emitId,
+                name: sanitizedName,
                 args,
               },
             };
             if (callSignature) part.thoughtSignature = callSignature;
             parts.push(part);
-            toolCallIds.push(tc.id);
+            toolCallsList.push({ origId: tc.id, emitId, name: sanitizedName });
           }
 
           if (parts.length > 0) {
             result.contents.push({ role: "model", parts });
           }
 
+          // Gather tool response messages immediately following this assistant message
+          const localToolResponses = {};
+          let nextIdx = i + 1;
+          while (
+            nextIdx < body.messages.length &&
+            body.messages[nextIdx]?.role === "tool"
+          ) {
+            const toolMsg = body.messages[nextIdx];
+            if (toolMsg.tool_call_id) {
+              (localToolResponses[toolMsg.tool_call_id] ||= []).push(toolMsg.content);
+            }
+            nextIdx++;
+          }
+
           // Check if there are actual tool responses in the next messages
-          const hasActualResponses = toolCallIds.some(
-            (fid) => toolResponses[fid],
+          const hasActualResponses = toolCallsList.some(
+            ({ origId }) =>
+              (localToolResponses[origId]?.length ?? 0) > 0 ||
+              (toolResponseCursor[origId] || 0) < (toolResponses[origId]?.length ?? 0),
           );
+          const isIntermediate = i < body.messages.length - 1;
 
-          if (hasActualResponses) {
+          if (hasActualResponses || isIntermediate) {
             const toolParts = [];
-            for (const fid of toolCallIds) {
-              if (!toolResponses[fid]) continue;
-
-              let name = tcID2Name[fid];
-              if (!name) {
-                const idParts = fid.split("-");
-                if (idParts.length > 2) {
-                  name = idParts.slice(0, -2).join("-");
-                } else {
-                  name = fid;
+            for (const { origId, emitId, name } of toolCallsList) {
+              let resp = "";
+              if (localToolResponses[origId]?.length) {
+                resp = localToolResponses[origId].shift();
+              } else {
+                const queue = toolResponses[origId];
+                const cursor = toolResponseCursor[origId] || 0;
+                if (queue && cursor < queue.length) {
+                  resp = queue[cursor];
+                  toolResponseCursor[origId] = cursor + 1;
                 }
               }
 
-              let resp = toolResponses[fid];
               let parsedResp = tryParseJSON(resp);
               if (parsedResp === null) {
                 parsedResp = { result: resp };
@@ -278,7 +368,7 @@ function openaiToGeminiBase(
 
               toolParts.push({
                 functionResponse: {
-                  id: fid,
+                  id: emitId,
                   name: sanitizeGeminiFunctionName(name),
                   response: { result: sanitizeFunctionResponseData(parsedResp) },
                 },
@@ -331,7 +421,7 @@ function openaiToGeminiBase(
 
   // Upstream fix from open-sse commit 8d1db46be
   // Normalize contents to prevent 400 invalid_argument on consecutive same-role messages
-  result.contents = normalizeGeminiContents(result.contents);
+  result.contents = normalizeGeminiContents(result.contents, model);
 
   return result;
 }
@@ -426,7 +516,8 @@ function wrapInCloudCodeEnvelope(
   credentials = null,
   isAntigravity = false,
 ) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+  const projectId = credentials?.projectId || generateProjectId(seed);
 
   const envelope = {
     project: projectId,
@@ -483,7 +574,8 @@ function wrapInCloudCodeEnvelopeForClaude(
   claudeRequest,
   credentials = null,
 ) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+  const projectId = credentials?.projectId || generateProjectId(seed);
 
   const envelope = {
     project: projectId,
@@ -527,11 +619,12 @@ function wrapInCloudCodeEnvelopeForClaude(
         for (const block of msg.content) {
           if (block.type === "text") {
             parts.push({ text: block.text });
-          } else if (block.type === "tool_use") {
+          } else if (block.type === CLAUDE_BLOCK.TOOL_USE) {
             const cachedSignature = block.id
               ? getGeminiThoughtSignatureSync(
                   block.id,
                   credentials?._clientSessionId,
+                  model,
                 )
               : null;
             const thoughtSignature =
@@ -635,6 +728,7 @@ function wrapInCloudCodeEnvelopeForClaude(
   // Normalize contents to prevent 400 invalid_argument on consecutive same-role messages
   envelope.request.contents = normalizeGeminiContents(
     envelope.request.contents,
+    model,
   );
 
   return envelope;

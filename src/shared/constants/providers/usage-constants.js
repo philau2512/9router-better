@@ -26,6 +26,9 @@ export const USAGE_SUPPORTED_PROVIDERS = [
   "opencode-go",
   "groq",
   "zed",
+  "commandcode",
+  "minimax-code",
+  "minimax-code-global",
 ];
 
 // Subset that uses apikey auth (still surfaced on quota page).
@@ -43,4 +46,5 @@ export const USAGE_APIKEY_PROVIDERS = [
   "deepseek",
   "opencode-go",
   "groq",
+  "commandcode",
 ];

@@ -1,5 +1,7 @@
 import { translateResponse, initState } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
+import { PROVIDERS } from "../providers/index.js";
+import { liftReasoningAliases } from "../translator/concerns/reasoning.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import {
   extractUsage,
@@ -16,7 +18,9 @@ import {
   hasValuableContent,
   fixInvalidId,
   formatSSE,
+  ensureStreamToolCallIds,
 } from "./streamHelpers.js";
+import { restoreToolNames } from "./opencodeFingerprint.js";
 import {
   getOpenAIResponsesEventName,
   isOpenAIResponsesTerminalEvent,
@@ -40,6 +44,11 @@ const STREAM_MODE = {
   TRANSLATE: "translate", // Full translation between formats
   PASSTHROUGH: "passthrough", // No translation, normalize output, extract usage
 };
+
+// Upper bound on the deferred response.completed wait: a chat->responses stream
+// that saw finish_reason without usage must not hold the client's terminal event
+// forever when the upstream stalls with no usage trailer and no [DONE].
+const PENDING_COMPLETION_FLUSH_MS = 3000;
 
 /**
  * Create unified SSE transform stream
@@ -117,6 +126,13 @@ export function createSSEStream(options = {}) {
 
   let buffer = "";
   let usage = null;
+  let completionFlushTimer = null;
+
+  // Tool-call ids already sent to the client, keyed by the tool-call index.
+  // A late fragment that opens a NEW index without an id must not reach the
+  // client as-is: strict OpenAI-compatible SDKs abort the turn on a
+  // tool_call without a string id (#4992).
+  const seenToolCallIds = new Map();
 
   // Performance tracking — anchor TTFT to request entry when available.
   // firstTokenTime = first visible text only (not thinking/reasoning).
@@ -145,6 +161,12 @@ export function createSSEStream(options = {}) {
           model,
           sessionId: credentials?._clientSessionId || null,
           geminiSawThought: resumedAfterAntigravityThought,
+          // Which upstream format this stream came from. A response translator can be
+          // reached either directly (target === its registered source) or as the second
+          // hop of a pivot, and on the terminal null chunk the pivot drops it — so a
+          // translator that defers closing events until flush needs to know which case
+          // it is in. Absent/undefined means "unknown", i.e. do not defer.
+          targetFormat,
         }
       : null;
   if (streamStateTracker) {
@@ -192,6 +214,29 @@ export function createSSEStream(options = {}) {
   let streamDoneSent = false; // track duplicate [DONE] across transform + flush
   const outputItemCollector = createOutputItemCollector(); // Phase 4: Codex output reconstruction
 
+  // Lane quirk: upstream streams thinking under the OpenRouter aliases
+  // (`reasoning` / `reasoning_details[]`) instead of reasoning_content — OpenCode
+  // Free's MiMo route does. Lift it on every passthrough delta so OpenAI-shaped
+  // clients, the thinking accumulation below and usage accounting see the text.
+  const liftAliases = mode === STREAM_MODE.PASSTHROUGH && !!PROVIDERS[provider]?.quirks?.reasoningAliasFields;
+
+  // Emit the deferred response.completed now — at [DONE], or when the watchdog
+  // below gives up on a usage trailer that never arrives.
+  const flushPendingCompletion = (controller) => {
+    if (completionFlushTimer) {
+      clearTimeout(completionFlushTimer);
+      completionFlushTimer = null;
+    }
+    const completed = translateResponse(targetFormat, sourceFormat, null, state);
+    for (const item of completed || []) {
+      if (item === null || item === undefined) continue;
+      const output = formatSSE(item, sourceFormat);
+      reqLogger?.appendConvertedChunk?.(output);
+      controller.enqueue(sharedEncoder.encode(output));
+      sseEmittedCount++;
+    }
+  };
+
   // Translate a single already-parsed event object into client-format SSE bytes.
   // Shared by the byte line-loop (after parseSSELine) AND the Phase 3 object-input
   // fast path, so all translate-branch side effects run once, identically, in
@@ -224,6 +269,18 @@ export function createSSEStream(options = {}) {
     // For Ollama: done=true is the final chunk with finish_reason/usage, must translate
     // For other formats: done=true is the [DONE] sentinel, skip
     if (parsed && parsed.done && targetFormat !== FORMATS.OLLAMA) {
+      // A direct Chat-to-Responses translation can defer response.completed
+      // while waiting for a usage trailer. [DONE] ends that opportunity even
+      // if the upstream keeps the HTTP connection open, so finish now.
+      if (
+        targetFormat === FORMATS.OPENAI &&
+        sourceFormat === FORMATS.OPENAI_RESPONSES &&
+        state?.completionPending &&
+        !state?.completedSent
+      ) {
+        flushPendingCompletion(controller);
+      }
+
       // Synthesize response.failed if the Responses stream never sent a terminal event
       if (keepsOpenAIResponsesFormat && !openAIResponsesTerminalSeen) {
         const failedOutput = formatIncompleteOpenAIResponsesStreamFailure();
@@ -422,6 +479,27 @@ export function createSSEStream(options = {}) {
         controller.enqueue(sharedEncoder.encode(output));
         sseEmittedCount++;
       }
+
+      // The completion deferral can outlive the upstream: a broken chat upstream
+      // may stall after finish_reason with no usage trailer and no [DONE], holding
+      // the connection open. Bound the wait so the client still gets a terminal event.
+      if (
+        targetFormat === FORMATS.OPENAI &&
+        sourceFormat === FORMATS.OPENAI_RESPONSES &&
+        state?.completionPending &&
+        !state?.completedSent &&
+        !completionFlushTimer
+      ) {
+        completionFlushTimer = setTimeout(() => {
+          completionFlushTimer = null;
+          if (state?.completedSent) return;
+          try {
+            flushPendingCompletion(controller);
+          } catch {
+            /* controller already closed */
+          }
+        }, PENDING_COMPLETION_FLUSH_MS);
+      }
     }
   };
 
@@ -573,9 +651,27 @@ export function createSSEStream(options = {}) {
             trimmed.slice(5).trim() !== "[DONE]"
           ) {
             try {
-              const parsed = JSON.parse(trimmed.slice(5).trim());
+              let parsed = JSON.parse(trimmed.slice(5).trim());
 
               const idFixed = fixInvalidId(parsed);
+
+              // A fragment that opens a new tool-call index without an id breaks
+              // strict OpenAI-compatible clients. Mint/reuse one before the
+              // chunk reaches the client.
+              const toolCallIdFixed = ensureStreamToolCallIds(parsed, seenToolCallIds);
+
+              // The fingerprint pass renames a colliding caller tool to an alias
+              // (read -> read_client). On this path nothing restored it, so the
+              // client received a call to a tool it never declared and answered
+              // "Model tried to call unavailable tool 'read_client'" (#4986).
+              let toolNameRestored = false;
+              if (toolNameMap?.size) {
+                const restored = restoreToolNames(parsed, toolNameMap);
+                if (restored !== parsed) {
+                  parsed = restored;
+                  toolNameRestored = true;
+                }
+              }
 
               // Ensure OpenAI-required fields are present on streaming chunks (Letta compat)
               let fieldsInjected = false;
@@ -623,6 +719,20 @@ export function createSSEStream(options = {}) {
                   model: targetModelAlias,
                 };
                 fieldsInjected = true;
+              }
+
+              // Alias lanes: expose thinking as reasoning_content (additive) before
+              // the valuable-content check, so reasoning-only chunks survive.
+              if (liftAliases && parsed?.choices) {
+                for (const choice of parsed.choices) {
+                  if (choice?.delta) {
+                    const lifted = liftReasoningAliases(choice.delta);
+                    if (lifted !== choice.delta) {
+                      choice.delta = lifted;
+                      fieldsInjected = true;
+                    }
+                  }
+                }
               }
 
               // Strip empty tool_calls arrays that break AI SDK reasoning tracking.
@@ -719,7 +829,7 @@ export function createSSEStream(options = {}) {
                 parsed.usage = filterUsageForFormat(buffered, FORMATS.OPENAI);
                 output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
-              } else if (idFixed || fieldsInjected) {
+              } else if (idFixed || fieldsInjected || toolCallIdFixed || toolNameRestored) {
                 output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
               }
@@ -861,6 +971,11 @@ export function createSSEStream(options = {}) {
             translateOneEvent(parsed, controller);
             updateTracker();
           }
+        }
+
+        if (completionFlushTimer) {
+          clearTimeout(completionFlushTimer);
+          completionFlushTimer = null;
         }
 
         const flushed = translateResponse(
@@ -1056,14 +1171,24 @@ export function createPassthroughStreamWithLogger(
   body = null,
   onStreamComplete = null,
   apiKey = null,
-  streamStateTracker = null,
+  arg8 = null,
   targetModelAlias = null,
   requestStartTime = null,
+  toolNameMap = null,
 ) {
+  let streamStateTracker = null;
+  let effectiveToolNameMap = toolNameMap;
+  if (arg8 instanceof Map) {
+    effectiveToolNameMap = arg8;
+  } else {
+    streamStateTracker = arg8;
+  }
+
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
     reqLogger,
+    toolNameMap: effectiveToolNameMap,
     model,
     connectionId,
     body,

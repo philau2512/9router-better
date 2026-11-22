@@ -312,6 +312,14 @@ export default function ComboFormModal({
         onClose={handleCloseModelSelect}
         onSelect={handleAddModel}
         onDeselect={handleDeselectModel}
+        onSelectBatch={(items) => {
+          const vals = items.map((m) => m?.value || m?.name || m).filter(Boolean);
+          setModels((prev) => [...new Set([...prev, ...vals])]);
+        }}
+        onDeselectBatch={(items) => {
+          const vals = new Set(items.map((m) => m?.value || m?.name || m).filter(Boolean));
+          setModels((prev) => prev.filter((m) => !vals.has(m)));
+        }}
         activeProviders={activeProviders}
         modelAliases={modelAliases}
         title="Add Model to Combo"

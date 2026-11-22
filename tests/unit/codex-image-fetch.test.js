@@ -10,9 +10,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-// Mock DNS lookup so SSRF guard resolves example.com to a public IP.
-const lookupMock = vi.fn();
-vi.mock("node:dns/promises", () => ({ lookup: (...a) => lookupMock(...a) }));
+// Mock DNS so the SSRF guard treats example.com as public.
+// image.js resolves with { all: true } (DNS pinning, c7d07448) and expects an array.
+vi.mock("node:dns/promises", () => ({
+  lookup: async (_host, opts) => (opts?.all ? [{ address: "93.184.216.34", family: 4 }] : { address: "93.184.216.34", family: 4 }),
+}));
 
 import { CodexExecutor } from "../../open-sse/executors/codex.js";
 import { fetchImageAsBase64 } from "../../open-sse/translator/concerns/image.js";

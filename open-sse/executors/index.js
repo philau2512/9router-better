@@ -10,12 +10,20 @@ import { CursorExecutor } from "./cursor.js";
 import { VertexExecutor } from "./vertex.js";
 import { OpenCodeExecutor } from "./opencode.js";
 import { OpenCodeGoExecutor } from "./opencode-go.js";
+import { OpenCodeZenExecutor } from "./opencode-zen.js";
 import { GrokWebExecutor } from "./grok-web.js";
 import { GrokCliExecutor } from "./grok-cli.js";
 import { PerplexityWebExecutor } from "./perplexity-web.js";
+import { DeepSeekWebExecutor } from "./deepseek-web.js";
+import { GeminiWebExecutor } from "./gemini-web.js";
+import { MuseWebExecutor } from "./muse-web.js";
+import { VeoAiFreeWebExecutor } from "./veoaifree-web.js";
+import { UcWebExecutor } from "./uc-web.js";
+import { ChatGptWebExecutor } from "./chatgpt-web.js";
 import { OllamaLocalExecutor } from "./ollama-local.js";
 import { CommandCodeExecutor } from "./commandcode.js";
 import { XiaomiTokenplanExecutor } from "./xiaomi-tokenplan.js";
+import { XiaomiMimoExecutor } from "./xiaomi-mimo.js";
 import { MimoFreeExecutor } from "./mimo-free.js";
 import { CodeBuddyExecutor } from "./codebuddy-cn.js";
 import { CodeBuddyIntlExecutor } from "./codebuddy-intl.js";
@@ -24,6 +32,8 @@ import ZedExecutor from "./zed.js";
 import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
 import { DevinCliExecutor } from "./devin-cli.js";
+import { BedrockExecutor } from "./bedrock.js";
+import { MinimaxCodeExecutor } from "./minimax-code.js";
 
 const executors = {
   antigravity: new AntigravityExecutor(),
@@ -40,14 +50,23 @@ const executors = {
   "vertex-partner": new VertexExecutor("vertex-partner"),
   opencode: new OpenCodeExecutor(),
   "opencode-go": new OpenCodeGoExecutor(),
+  "opencode-zen": new OpenCodeZenExecutor(),
   "grok-web": new GrokWebExecutor(),
   "grok-cli": new GrokCliExecutor(),
   gcli: new GrokCliExecutor(),
   gb: new GrokCliExecutor(),
   "perplexity-web": new PerplexityWebExecutor(),
+  "deepseek-web": new DeepSeekWebExecutor(),
+  "gemini-web": new GeminiWebExecutor(),
+  "muse-web": new MuseWebExecutor(),
+  "veoaifree-web": new VeoAiFreeWebExecutor(),
+  "veo-free": new VeoAiFreeWebExecutor(), // Alias
+  "uc-web": new UcWebExecutor(),
+  "chatgpt-web": new ChatGptWebExecutor(),
   "ollama-local": new OllamaLocalExecutor(),
   commandcode: new CommandCodeExecutor(),
   "xiaomi-tokenplan": new XiaomiTokenplanExecutor(),
+  "xiaomi-mimo": new XiaomiMimoExecutor(),
   "mimo-free": new MimoFreeExecutor(),
   mmf: new MimoFreeExecutor(), // Alias for mimo-free
   "codebuddy-cn": new CodeBuddyExecutor(),
@@ -57,6 +76,14 @@ const executors = {
   zed: new ZedExecutor(),
   windsurf: new WindsurfExecutor(),
   "devin-cli": new DevinCliExecutor(),
+  bedrock: new BedrockExecutor(),
+  br: new BedrockExecutor(), // Alias for bedrock
+  "bedrock-xai": new BedrockExecutor("bedrock-xai"),
+  brx: new BedrockExecutor("bedrock-xai"), // Alias for bedrock-xai
+  "minimax-code": new MinimaxCodeExecutor("minimax-code"),
+  mm: new MinimaxCodeExecutor("minimax-code"), // Alias for minimax-code
+  "minimax-code-global": new MinimaxCodeExecutor("minimax-code-global"),
+  mmg: new MinimaxCodeExecutor("minimax-code-global"), // Alias for minimax-code-global
 };
 
 const defaultCache = new Map();
@@ -74,6 +101,7 @@ export function hasSpecializedExecutor(provider) {
 
 export { BaseExecutor } from "./base.js";
 export { AntigravityExecutor } from "./antigravity.js";
+export { BedrockExecutor } from "./bedrock.js";
 export { AzureExecutor } from "./azure.js";
 export { GeminiCLIExecutor } from "./gemini-cli.js";
 export { GithubExecutor } from "./github.js";
@@ -86,12 +114,18 @@ export { VertexExecutor } from "./vertex.js";
 export { DefaultExecutor } from "./default.js";
 export { OpenCodeExecutor } from "./opencode.js";
 export { OpenCodeGoExecutor } from "./opencode-go.js";
+export { OpenCodeZenExecutor } from "./opencode-zen.js";
 export { GrokWebExecutor } from "./grok-web.js";
 export { GrokCliExecutor } from "./grok-cli.js";
 export { PerplexityWebExecutor } from "./perplexity-web.js";
+export { DeepSeekWebExecutor } from "./deepseek-web.js";
+export { GeminiWebExecutor } from "./gemini-web.js";
+export { MuseWebExecutor } from "./muse-web.js";
+export { ChatGptWebExecutor } from "./chatgpt-web.js";
 export { OllamaLocalExecutor } from "./ollama-local.js";
 export { CommandCodeExecutor } from "./commandcode.js";
 export { XiaomiTokenplanExecutor } from "./xiaomi-tokenplan.js";
+export { XiaomiMimoExecutor } from "./xiaomi-mimo.js";
 export { MimoFreeExecutor } from "./mimo-free.js";
 export { CodeBuddyExecutor } from "./codebuddy-cn.js";
 export { CodeBuddyIntlExecutor } from "./codebuddy-intl.js";

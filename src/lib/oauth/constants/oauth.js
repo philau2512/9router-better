@@ -305,6 +305,21 @@ export const CODEBUDDY_INTL_CONFIG = {
 //   3) Redirect → ${cb}?refreshToken=...&loginHost=...&isRedirect=true
 //   4) POST ExchangeToken {ClientID, RefreshToken, ClientSecret:"-"} → {Result.AccessToken, ExpiresAt}
 //   5) POST GetUserInfo (x-cloudide-token) → email/name
+// Xiaomi MiMo Desktop OAuth — custom ECDH encrypted-callback flow (NOT standard OAuth2).
+//   1) Client generates X25519 keypair
+//   2) Browser opens ${platformUrl}/authorize?pk=<pubkey>&redirect_uri=http://localhost:<port>/&kn=mimocode&key_name=...
+//   3) Redirect → http://localhost:<port>/?u=<base64 encrypted payload>
+//   4) Decrypt: ECDH(shared) → SHA256 → AES-256-GCM
+//      Layout: [12-byte nonce][32-byte ephemeral pubkey][ciphertext][16-byte GCM tag]
+//   5) Result JSON: { uid, sk, url }
+export const XIAOMI_MIMO_CONFIG = {
+  platformUrl: process.env.MIMO_PLATFORM_URL || "https://platform.xiaomimimo.com",
+  defaultBaseUrl: "https://api.xiaomimimo.com/v1",
+  kn: "mimocode",
+  callbackPath: "/",
+  timeoutMs: 300000, // 5 minutes
+};
+
 export const TRAE_CONFIG = {
   clientId: "ono9krqynydwx5",
   clientSecret: "-",
@@ -370,6 +385,17 @@ export const ZED_HOSTED_CONFIG = {
   oauthTimeoutMs: 600_000,
 };
 
+// Nous Research Portal — OAuth 2.0 Device Code flow (RFC 8628) + agent key minting
+export const NOUS_CONFIG = {
+  clientId: "hermes-cli",
+  portalBaseUrl: "https://portal.nousresearch.com",
+  deviceCodeUrl: "https://portal.nousresearch.com/api/oauth/device/code",
+  tokenUrl: "https://portal.nousresearch.com/api/oauth/token",
+  agentKeyUrl: "https://portal.nousresearch.com/api/oauth/agent-key",
+  inferenceBaseUrl: "https://inference-api.nousresearch.com/v1",
+  scope: "inference:invoke inference:mint_agent_key",
+};
+
 // OAuth timeout (5 minutes)
 export const OAUTH_TIMEOUT = 300000;
 
@@ -412,4 +438,5 @@ export const PROVIDERS = {
   TRAE: "trae",
   WINDSURF: "windsurf",
   ZED: "zed",
+  NOUS: "nous",
 };

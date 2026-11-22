@@ -26,6 +26,7 @@ import {
   saveRequestDetail,
 } from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
+import { PROVIDERS } from "../providers/index.js";
 import { buildAntigravityEmptyStopContinuation } from "../executors/antigravity.js";
 import {
   buildRequestDetail,
@@ -44,6 +45,7 @@ import {
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
+import { injectCustomPrompt } from "../rtk/customPrompt.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import {
   compressWithHeadroom,
@@ -66,6 +68,7 @@ import {
 } from "../utils/antigravityReasoningReplay.js";
 import {
   defaultClaudeToolType,
+  shouldDefaultClaudeToolType,
   stripOrphanedToolResults,
 } from "../translator/concerns/toolCall.js";
 import { compressWithPxpipe, formatPxpipeLog } from "../rtk/pxpipe.js";
@@ -128,7 +131,6 @@ function maskLoggedUrl(rawUrl) {
   }
 }
 
-
 /**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
@@ -181,6 +183,9 @@ export async function handleChatCore({
   cavemanLevel,
   ponytailEnabled,
   ponytailLevel,
+  customPromptEnabled,
+  customPrompt,
+  providerOverrides,
   midStreamResumeEnabled,
   sourceFormatOverride,
   providerThinking,
@@ -246,7 +251,6 @@ export async function handleChatCore({
     credentials.runtimeTransport = useTransport;
   }
   const stripList = getModelStrip(alias, model);
-  const upstreamModel = getModelUpstreamId(alias, model) || model;
 
   // Inject provider-level thinking config override (only if client hasn't set)
   // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
@@ -268,6 +272,9 @@ export async function handleChatCore({
     const _cachedThinking = _replayKey ? getCachedThinking(_replayKey) : null;
     if (_cachedThinking) body = injectThinkingReplay(body, _cachedThinking);
   }
+
+  const upstreamModel = getModelUpstreamId(alias, model, body) || model;
+
 
   const clientRequestedStreaming =
     body.stream === true ||
@@ -321,6 +328,7 @@ export async function handleChatCore({
       clientRawRequest.headers,
     );
   reqLogger.logRawRequest(body);
+  reqLogger.recordTelemetry?.({ phase: "request_ready", elapsedMs: Date.now() - requestStartTime });
   log?.debug?.(
     "FORMAT",
     `${sourceFormat} → ${targetFormat} | stream=${stream}`,
@@ -413,9 +421,18 @@ export async function handleChatCore({
     );
     if (!translatedBody) {
       trackPendingRequest(model, provider, connectionId, false, true);
+      const errMsg = `Failed to translate request for ${sourceFormat} → ${targetFormat}`;
+      reqLogger.logError(new Error(errMsg), body);
+      reqLogger.finalize?.({
+        durationMs: Date.now() - requestStartTime,
+        status: "error",
+        error: new Error(errMsg),
+        timing,
+        endReason: "translation_error",
+      });
       return createErrorResult(
         HTTP_STATUS.BAD_REQUEST,
-        `Failed to translate request for ${sourceFormat} → ${targetFormat}`,
+        errMsg,
       );
     }
     toolNameMap = translatedBody._toolNameMap;
@@ -495,7 +512,7 @@ export async function handleChatCore({
     if (isHeadroomPhantomSavings(headroomStats, headroomDiagnostics)) {
       log?.warn?.(
         "HEADROOM",
-        `reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload | ${headroomSizeLine}`,
+        `reported token delta, but messages and outbound JSON shrank <5% | ${formatHeadroomSizeLog(headroomDiagnostics)}`,
       );
     }
   } else if (tokenSaverEnabled && headroomEnabled) {
@@ -513,8 +530,13 @@ export async function handleChatCore({
     delete translatedBody.tools;
   }
 
-  // Claude tool schema requires an explicit type on strict gateways.
-  if (finalFormat === FORMATS.CLAUDE && Array.isArray(translatedBody.tools)) {
+  // Claude tool schema requires `type` to be explicitly set; strict gateways (e.g., MiniMax)
+  // reject legacy payloads that omit it with HTTP 400. Default to "custom" when missing.
+  // Provider-scoped via quirks (shouldDefaultClaudeToolType): only gateways that declare
+  // requireClaudeToolType get the explicit type. Applying it unconditionally breaks
+  // Claude-format endpoints that only accept the legacy typeless tool shape — DeepSeek's
+  // Anthropic-compatible endpoint 400s with "unknown variant `custom`" (#3905).
+  if (shouldDefaultClaudeToolType(provider, finalFormat, translatedBody.tools, PROVIDERS)) {
     translatedBody.tools = defaultClaudeToolType(translatedBody.tools);
   }
 
@@ -562,6 +584,10 @@ export async function handleChatCore({
     log?.debug?.("PONYTAIL", `${ponytailLevel} | ${finalFormat}`);
   }
 
+  // Custom prompt: user-authored instruction, independent of the savers above
+  if (customPromptEnabled && injectCustomPrompt(translatedBody, finalFormat, customPrompt)) {
+    log?.debug?.("CUSTOMPROMPT", `${customPrompt.trim().length} chars | ${finalFormat}`);
+  }
   const executor = getExecutor(provider);
   stripContinuityFields(translatedBody);
   trackPendingRequest(model, provider, connectionId, true);
@@ -676,11 +702,13 @@ export async function handleChatCore({
       emitObjects: wantKiroObjects,
       onProfileArnDiscovered,
       timing,
+      requestLogger: reqLogger,
     });
   try {
     if (timing && !timing.upstreamFetchStartedAt) {
       timing.upstreamFetchStartedAt = Date.now();
     }
+    reqLogger.recordTelemetry?.({ phase: "executor_start", elapsedMs: Date.now() - requestStartTime });
     const result = await runExecutor();
     providerResponse = result.response;
     providerUrl = result.url;
@@ -723,6 +751,14 @@ export async function handleChatCore({
       }),
     ).catch(() => {});
 
+    reqLogger.logError(error, translatedBody);
+    reqLogger.finalize?.({
+      durationMs: Date.now() - requestStartTime,
+      status: "error",
+      error,
+      timing,
+      endReason: error.name === "AbortError" ? "abort" : error.name,
+    });
     if (error.name === "AbortError") {
       streamController.handleError(error);
       return createErrorResult(499, "Request aborted");
@@ -888,6 +924,11 @@ export async function handleChatCore({
     );
     console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
     reqLogger.logError(new Error(message), finalBody || translatedBody);
+    reqLogger.finalize?.({
+      durationMs: Date.now() - requestStartTime,
+      status: "error",
+      error: new Error(message),
+    });
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
 
@@ -904,6 +945,7 @@ export async function handleChatCore({
     clientRawRequest,
     onRequestSuccess,
     midStreamResumeEnabled,
+    reqLogger,
     // PxPipe compression stats — included so requestDetail builders can persist them.
     pxpipe: pxpipeSummary || undefined,
   };

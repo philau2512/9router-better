@@ -1,4 +1,8 @@
 // Auto-generated: static imports for all registry entries
+import p_agnes from "./agnes.js";
+import p_atria from "./atria.js";
+import p_bai from "./bai.js";
+import p_dahl from "./dahl.js";
 import p0 from "./alicode-intl.js";
 import p1 from "./alicode.js";
 import p2 from "./anthropic.js";
@@ -69,6 +73,7 @@ import p66 from "./ollama.js";
 import p123 from "./ollama-search.js";
 import p67 from "./openai.js";
 import p68 from "./opencode-go.js";
+import p68z from "./opencode-zen.js";
 import p69 from "./opencode.js";
 import p70 from "./openrouter.js";
 import p71 from "./perplexity-web.js";
@@ -83,6 +88,7 @@ import p80 from "./searchapi.js";
 import p81 from "./searxng.js";
 import p82 from "./serper.js";
 import p83 from "./siliconflow.js";
+import p139 from "./sensenova.js";
 import p84 from "./stability-ai.js";
 import p85 from "./tavily.js";
 import p86 from "./together.js";
@@ -123,8 +129,23 @@ import p119 from "./selfhosted-embedding.js";
 import p120 from "./fish-audio.js";
 import p121 from "./alitp-intl.js";
 import p122 from "./xquik.js";
-
+import p_bedrock from "./bedrock.js";
+import p_bedrock_xai from "./bedrock-xai.js";
+import p_minimax_code from "./minimax-code.js";
+import p_minimax_code_global from "./minimax-code-global.js";
+import p_nous from "./nous.js";
+import p140 from "./deepseek-web.js";
+import p143 from "./gemini-web.js";
+import p144 from "./muse-web.js";
+import p146 from "./chatgpt-web.js";
+import p147 from "./veoaifree-web.js";
+import p151 from "./uc-web.js";
+import p_muse from "./muse.js";
 export default [
+  p_agnes,
+  p_atria,
+  p_bai,
+  p_dahl,
   p0,
   p1,
   p2,
@@ -195,6 +216,7 @@ export default [
   p123,
   p67,
   p68,
+  p68z,
   p69,
   p70,
   p71,
@@ -209,6 +231,7 @@ export default [
   p81,
   p82,
   p83,
+  p139,
   p84,
   p85,
   p86,
@@ -247,4 +270,16 @@ export default [
   p120,
   p121,
   p122,
+  p_bedrock,
+  p_bedrock_xai,
+  p_minimax_code,
+  p_minimax_code_global,
+  p_nous,
+  p140,
+  p143,
+  p144,
+  p146,
+  p147,
+  p151,
+  p_muse,
 ];

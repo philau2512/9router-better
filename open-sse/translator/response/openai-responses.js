@@ -8,6 +8,39 @@ import { buildChunk } from "../concerns/chunk.js";
 import { clampResponsesCallId } from "../formats/responsesApi.js";
 import { OPENAI_BLOCK, RESPONSES_ITEM, MODEL_FALLBACK } from "../schema/index.js";
 
+// Upstream Chat Completions usage -> Responses API usage shape.
+// Without this, /v1/responses never reports usage: Responses clients (Codex CLI)
+// keep their "context used" gauge pinned at 0 and never auto-compact, so a long
+// session grows until the upstream context limit rejects it (9router issue #3432).
+//
+// Note this is stored under state.responsesUsage, NOT state.usage: state.usage is
+// owned by the stream layer, which fills it with normalizeUsage()-shaped counts
+// (prompt_tokens/prompt_tokens_details) and hands it to finalizeStream() for
+// logging and cost accounting. Overwriting it with this shape silently drops
+// cached/reasoning tokens from those stats.
+function toResponsesUsage(usage) {
+  if (!usage || typeof usage !== "object") return null;
+
+  const inputTokens = [usage.input_tokens, usage.prompt_tokens].find(Number.isInteger);
+  const outputTokens = [usage.output_tokens, usage.completion_tokens].find(Number.isInteger);
+  // Some upstreams attach zeroed placeholders to every chunk. Wait for real counts
+  // so response.completed cannot freeze the placeholder before the usage trailer.
+  if (inputTokens === undefined || outputTokens === undefined || inputTokens + outputTokens <= 0) {
+    return null;
+  }
+  const responseUsage = {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: inputTokens + outputTokens
+  };
+  const cachedTokens = [usage.input_tokens_details?.cached_tokens, usage.prompt_tokens_details?.cached_tokens].find(Number.isInteger);
+  const reasoningTokens = [usage.output_tokens_details?.reasoning_tokens, usage.completion_tokens_details?.reasoning_tokens].find(Number.isInteger);
+  if (Number.isInteger(cachedTokens)) responseUsage.input_tokens_details = { cached_tokens: cachedTokens };
+  if (Number.isInteger(reasoningTokens)) responseUsage.output_tokens_details = { reasoning_tokens: reasoningTokens };
+
+  return responseUsage;
+}
+
 /**
  * Translate OpenAI chunk to Responses API events
  * @returns {Array} Array of events with { event, data } structure
@@ -17,11 +50,14 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     return flushEvents(state);
   }
 
-  if (chunk.usage && typeof chunk.usage === "object") {
-    state.usage = chunk.usage;
-  }
+  // Capture usage before the choices guard: OpenAI may send it in a trailer
+  // whose choices array is empty.
+  const responseUsage = toResponsesUsage(chunk.usage);
+  if (responseUsage) state.responsesUsage = responseUsage;
 
-  if (!chunk.choices?.length) return [];
+  if (!chunk.choices?.length) {
+    return state.completionPending && state.responsesUsage ? flushEvents(state) : [];
+  }
 
   const events = [];
   const nextSeq = () => ++state.seq;
@@ -121,6 +157,11 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
           providerError?.message ||
           "Provider returned an empty STOP with no content or tool calls",
       });
+    } else if (state.targetFormat === FORMATS.OPENAI && !state.responsesUsage) {
+      // Direct openai:openai-responses route: finish_reason arrived before
+      // usage. Defer response.completed until the trailer chunk, [DONE],
+      // or the stream watchdog flushes it.
+      state.completionPending = true;
     } else {
       sendCompleted(state, emit);
     }
@@ -164,7 +205,8 @@ function startReasoning(state, emit, idx) {
 
 function emitReasoningDelta(state, emit, text) {
   if (!text) return;
-  state.reasoningBuf += text;
+  if (!state.reasoningParts) state.reasoningParts = [];
+  state.reasoningParts.push(text);
   emit("response.reasoning_summary_text.delta", {
     type: "response.reasoning_summary_text.delta",
     item_id: state.reasoningId,
@@ -177,13 +219,15 @@ function emitReasoningDelta(state, emit, text) {
 function closeReasoning(state, emit) {
   if (state.reasoningId && !state.reasoningDone) {
     state.reasoningDone = true;
+    const fullText = (state.reasoningParts ? state.reasoningParts.join("") : "") || state.reasoningBuf || "";
+    state.reasoningBuf = fullText;
 
     emit("response.reasoning_summary_text.done", {
       type: "response.reasoning_summary_text.done",
       item_id: state.reasoningId,
       output_index: state.reasoningIndex,
       summary_index: 0,
-      text: state.reasoningBuf,
+      text: fullText,
     });
 
     emit("response.reasoning_summary_part.done", {
@@ -191,18 +235,22 @@ function closeReasoning(state, emit) {
       item_id: state.reasoningId,
       output_index: state.reasoningIndex,
       summary_index: 0,
-      part: { type: "summary_text", text: state.reasoningBuf },
+      part: { type: "summary_text", text: fullText },
     });
+
+    const item = {
+      id: state.reasoningId,
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: fullText }],
+    };
 
     emit("response.output_item.done", {
       type: "response.output_item.done",
       output_index: state.reasoningIndex,
-      item: {
-        id: state.reasoningId,
-        type: "reasoning",
-        summary: [{ type: "summary_text", text: state.reasoningBuf }],
-      },
+      item,
     });
+
+    recordCompletedOutputItem(state, state.reasoningIndex, item);
   }
 }
 
@@ -240,14 +288,16 @@ function emitTextContent(state, emit, idx, content) {
     logprobs: [],
   });
 
-  if (!state.msgTextBuf[idx]) state.msgTextBuf[idx] = "";
-  state.msgTextBuf[idx] += content;
+  if (!state.msgTextParts) state.msgTextParts = [];
+  if (!state.msgTextParts[idx]) state.msgTextParts[idx] = [];
+  state.msgTextParts[idx].push(content);
 }
 
 function closeMessage(state, emit, idx) {
   if (state.msgItemAdded[idx] && !state.msgItemDone[idx]) {
     state.msgItemDone[idx] = true;
-    const fullText = state.msgTextBuf[idx] || "";
+    const fullText = (state.msgTextParts?.[idx] ? state.msgTextParts[idx].join("") : "") || state.msgTextBuf[idx] || "";
+    state.msgTextBuf[idx] = fullText;
     const outputIndex = getOutputIndex(state, "message", idx);
     const msgId = `msg_${state.responseId}_${outputIndex}`;
 
@@ -273,23 +323,27 @@ function closeMessage(state, emit, idx) {
       },
     });
 
+    const item = {
+      id: msgId,
+      type: "message",
+      content: [
+        {
+          type: "output_text",
+          annotations: [],
+          logprobs: [],
+          text: fullText,
+        },
+      ],
+      role: "assistant",
+    };
+
     emit("response.output_item.done", {
       type: "response.output_item.done",
       output_index: outputIndex,
-      item: {
-        id: msgId,
-        type: "message",
-        content: [
-          {
-            type: "output_text",
-            annotations: [],
-            logprobs: [],
-            text: fullText,
-          },
-        ],
-        role: "assistant",
-      },
+      item,
     });
+
+    recordCompletedOutputItem(state, outputIndex, item);
   }
 }
 
@@ -351,6 +405,9 @@ function emitToolCall(state, emit, tc) {
         ? { type: "response.custom_tool_call_input.delta", item_id: `fc_${callId}`, output_index: getOutputIndex(state, "tool", tcIdx), delta: input }
         : { type: "response.function_call_arguments.delta", item_id: `fc_${callId}`, output_index: getOutputIndex(state, "tool", tcIdx), delta: raw });
     }
+    if (!state.funcArgsParts) state.funcArgsParts = [];
+    if (!state.funcArgsParts[tcIdx]) state.funcArgsParts[tcIdx] = [];
+    state.funcArgsParts[tcIdx].push(input);
     state.funcArgsBuf[tcIdx] += input;
   }
 }
@@ -367,7 +424,8 @@ function parseCustomToolInput(argumentsText) {
 function closeToolCall(state, emit, idx) {
   const callId = state.funcCallIds[idx];
   if (callId && !state.funcItemDone[idx]) {
-    const args = state.funcArgsBuf[idx] || "{}";
+    const args = (state.funcArgsParts?.[idx] ? state.funcArgsParts[idx].join("") : "") || state.funcArgsBuf[idx] || "{}";
+    state.funcArgsBuf[idx] = args;
 
     const outputIndex = getOutputIndex(state, "tool", idx);
     const isCustom = state.customToolNames?.has(state.funcNames[idx]);
@@ -405,9 +463,35 @@ function closeToolCall(state, emit, idx) {
       item,
     });
 
+    recordCompletedOutputItem(state, outputIndex, item);
+
     state.funcItemDone[idx] = true;
     state.funcArgsDone[idx] = true;
   }
+}
+
+// response.completed carries the finished Response object, so response.output has
+// to repeat the items already delivered in response.output_item.done. Clients that
+// build their final result from the terminal event (GitHub Copilot CLI, the OpenAI
+// SDK "final response" helpers) otherwise treat the turn as empty even though the
+// text was streamed - see issue #4307.
+//
+// Keyed by output_index so a repeated close overwrites rather than duplicating the
+// item, and ordered by output_index so response.output matches the order the items
+// were emitted in. Lazily created because stream.js can hand us a state it built
+// itself rather than one from initState().
+function recordCompletedOutputItem(state, outputIndex, item) {
+  state.completedOutputItems ??= new Map();
+  const index = Number.isInteger(outputIndex) ? outputIndex : Number.parseInt(outputIndex, 10) || 0;
+  state.completedOutputItems.set(index, item);
+}
+
+function collectCompletedOutputItems(state) {
+  const recorded = state.completedOutputItems;
+  if (!(recorded instanceof Map) || recorded.size === 0) return [];
+  return [...recorded.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([, item]) => item);
 }
 
 function formatResponsesUsage(usage) {
@@ -454,14 +538,9 @@ function sendCompleted(state, emit) {
       status: "completed",
       background: false,
       error: null,
+      output: collectCompletedOutputItems(state),
+      ...(state.responsesUsage ? { usage: state.responsesUsage } : {}),
     };
-
-    if (state.usage) {
-      const formattedUsage = formatResponsesUsage(state.usage);
-      if (formattedUsage) {
-        responseObj.usage = formattedUsage;
-      }
-    }
 
     emit("response.completed", {
       type: "response.completed",

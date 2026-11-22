@@ -138,7 +138,7 @@ describe("resolveSessionId", () => {
     expect(got).toBe("user-123");
   });
 
-  it("keeps x-client-request-id as a session override outside Kiro scope", () => {
+  it("keeps x-client-request-id as a session override outside Kiro scope when no body session is present", () => {
     const got = resolveSessionId({
       headers: { "x-client-request-id": "req-1" },
       body: bodyWithAssistant,
@@ -147,6 +147,24 @@ describe("resolveSessionId", () => {
     });
 
     expect(got).toBe("req-1");
+  });
+
+  it("prioritizes body prompt_cache_key and session_id over ephemeral x-client-request-id", () => {
+    const withCacheKey = resolveSessionId({
+      headers: { "x-client-request-id": "ephemeral-req-123" },
+      body: { ...bodyWithAssistant, prompt_cache_key: "stable-prompt-cache-key" },
+      connectionId: "conn1",
+      scope: "codex",
+    });
+    expect(withCacheKey).toBe("stable-prompt-cache-key");
+
+    const withSessionId = resolveSessionId({
+      headers: { "x-client-request-id": "ephemeral-req-456" },
+      body: { ...bodyWithAssistant, session_id: "stable-session-id" },
+      connectionId: "conn1",
+      scope: "codex",
+    });
+    expect(withSessionId).toBe("stable-session-id");
   });
 
 

@@ -7,12 +7,14 @@ import {
 } from "../../utils/stream.js";
 import { pipeWithDisconnect } from "../../utils/streamHandler.js";
 import { PROVIDERS } from "../../config/providers.js";
-import { STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
+import { HTTP_STATUS, STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
 import { buildAbortedResponsesTerminalBytes } from "../../utils/responsesStreamHelpers.js";
+import { buildStreamErrorBytes } from "../../utils/streamHelpers.js";
 import {
   buildRequestDetail,
   extractRequestConfig,
   saveUsageStats,
+  formatDoneLine,
 } from "./requestDetail.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
 import * as log from "../../../src/sse/utils/logger.js";
@@ -95,6 +97,9 @@ function buildTransformStream({
     return createTranslateStream(targetFormat, sourceFormat);
   }
 
+  // The passthrough path has no format translation, so the fingerprint's tool
+  // rename map (read -> read_client) has to be handed over explicitly —
+  // otherwise the client receives a call to a tool it never declared (#4986).
   return createPassthroughStreamWithLogger(
     provider,
     reqLogger,
@@ -106,6 +111,7 @@ function buildTransformStream({
     streamStateTracker,
     targetModelAlias,
     requestStartTime,
+    toolNameMap,
   );
 }
 
@@ -200,13 +206,25 @@ export async function handleStreamingResponse({
     };
   }
 
-  // Responses passthrough: synthesize response.failed + [DONE] if the stream aborts/stalls before a terminal event
+  // Terminal bytes when the stream aborts after HTTP 200 was already sent, so the
+  // client sees a real error instead of a silently truncated stream.
+  // Responses passthrough keeps its own response.failed shape; every other client
+  // format gets the OpenAI error frame + [DONE], or `event: error` for Claude.
   const isResponsesPassthrough =
     sourceFormat === FORMATS.OPENAI_RESPONSES &&
     targetFormat === FORMATS.OPENAI_RESPONSES;
-  const onAbortTerminal = isResponsesPassthrough
-    ? buildAbortedResponsesTerminalBytes
-    : null;
+  const onAbortTerminal = (message) => {
+    reqLogger?.finalize?.({
+      durationMs: Date.now() - requestStartTime,
+      status: "error",
+      error: new Error(message || "Stream aborted"),
+      timing,
+      endReason: message || "stream_aborted",
+    });
+    return isResponsesPassthrough
+      ? buildAbortedResponsesTerminalBytes(message)
+      : buildStreamErrorBytes(HTTP_STATUS.GATEWAY_TIMEOUT, message, sourceFormat);
+  };
   // Stall timeout resolution. Priority:
   //   credentials.providerSpecificData.stallTimeoutMs (>0, user override for
   //     slow reasoning models on compatible providers)
@@ -337,6 +355,7 @@ export function buildOnStreamComplete({
   translatedBody,
   clientRawRequest,
   timing,
+  reqLogger,
 }) {
   // Generate a shared id so the placeholder row (0 tokens) and the final row
   // (real usage) target the same DB record via ON CONFLICT(id) upsert.
@@ -358,7 +377,20 @@ export function buildOnStreamComplete({
     const safeContent = contentObj?.content || "[Empty streaming response]";
     const safeThinking = contentObj?.thinking || null;
 
+    reqLogger?.finalize?.({
+      durationMs: total,
+      ttft: latency.ttft,
+      status: "success",
+      usage,
+      timing,
+    });
+
     if (timing) {
+      reqLogger?.recordTelemetry?.({
+        phase: "stream_complete",
+        elapsedMs: total,
+        endReason: "eof",
+      });
       log.ttft(`${provider.toUpperCase()} | ${log.hlModel(model)}`, {
         total,
         ttft: latency.ttft,

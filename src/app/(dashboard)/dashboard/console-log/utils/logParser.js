@@ -124,10 +124,22 @@ export function parseLogLine(rawLine) {
     /in=(\d+)(?:\s+\|\s+out=(\d+))?(?:.*?cache_read=(\d+)\s*\(([\d.]+)%\))?/i,
   );
   if (usageMatch) {
-    metadata.tokensIn = Number(usageMatch[1]);
-    if (usageMatch[2]) metadata.tokensOut = Number(usageMatch[2]);
-    if (usageMatch[3]) metadata.cacheRead = Number(usageMatch[3]);
-    if (usageMatch[4]) metadata.cachePct = Number(usageMatch[4]);
+    let tokensIn = Number(usageMatch[1]);
+    const tokensOut = usageMatch[2] ? Number(usageMatch[2]) : null;
+    const cacheRead = usageMatch[3] ? Number(usageMatch[3]) : null;
+    let cachePct = usageMatch[4] ? Number(usageMatch[4]) : null;
+
+    // Defense-in-depth: if legacy/exclusive log reported tokensIn excluding cacheRead (cachePct > 100% or tokensIn < cacheRead),
+    // fold cacheRead into tokensIn and recompute cachePct so table view displays correctly.
+    if (cacheRead != null && (cachePct > 100 || tokensIn < cacheRead)) {
+      tokensIn += cacheRead;
+      cachePct = Number(((cacheRead / tokensIn) * 100).toFixed(2));
+    }
+
+    metadata.tokensIn = tokensIn;
+    if (tokensOut != null) metadata.tokensOut = tokensOut;
+    if (cacheRead != null) metadata.cacheRead = cacheRead;
+    if (cachePct != null) metadata.cachePct = cachePct;
   }
 
   // TTFT & Duration: total=4432 | ttft=1431 | 4429ms | complete | disconnect: ResponseAborted

@@ -1,6 +1,8 @@
 // Public API barrel — all DB functions
 import { getAdapter } from "./driver.js";
 import { stringifyJson, parseJson } from "./helpers/jsonCol.js";
+import { keyAccessFromColumns, keyAccessToColumns, validateKeyAccessInput } from "@/shared/utils/keyAccess.js";
+import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
 import {
   createFullDbSnapshot,
   restoreFullDbSnapshot,
@@ -50,6 +52,7 @@ export {
   getApiKeys,
   getApiKeyById,
   getApiKeyByValue,
+  getApiKeyByKey,
   createApiKey,
   updateApiKey,
   deleteApiKey,
@@ -170,6 +173,7 @@ export async function exportDb({ includeUsageAnalytics = false } = {}) {
       allowedProviders: parseJson(r.allowedProviders, []),
       allowedModels: parseJson(r.allowedModels, []),
       createdAt: r.createdAt,
+      access: keyAccessFromColumns(r.accessRestricted, r.accessAllow),
     })),
     combos: db.all(`SELECT * FROM combos`).map((r) => ({
       id: r.id,
@@ -315,8 +319,16 @@ export async function importDb(
       );
     }
     for (const k of payload.apiKeys || []) {
+      let access = KEY_ACCESS_UNRESTRICTED;
+      if (k.access !== undefined) {
+        const checked = validateKeyAccessInput(k.access);
+        if (!checked.ok) throw new Error(`apiKeys ${k.id}: ${checked.error}`);
+        access = checked.value;
+      }
+      const cols = keyAccessToColumns(access);
+
       db.run(
-        `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, allowedProviders, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, allowedProviders, allowedModels, createdAt, accessRestricted, accessAllow) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           k.id,
           k.key,
@@ -326,6 +338,8 @@ export async function importDb(
           stringifyJson(Array.isArray(k.allowedProviders) ? k.allowedProviders : []),
           stringifyJson(Array.isArray(k.allowedModels) ? k.allowedModels : []),
           k.createdAt || new Date().toISOString(),
+          cols.accessRestricted,
+          cols.accessAllow,
         ],
       );
     }

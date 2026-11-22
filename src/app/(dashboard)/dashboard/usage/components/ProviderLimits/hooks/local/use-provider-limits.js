@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
 import { parseQuotaData, calculatePercentage } from "../../utils";
@@ -43,11 +44,37 @@ export function useProviderLimits() {
     claude: {},
     codex: {},
   });
+  const [autoPingConfigs, setAutoPingConfigs] = useState({
+    claude: {},
+    codex: {},
+  });
   const [resetCreditsState, setResetCreditsState] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
-  const [providerFilter, setProviderFilter] = useState("all");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  // Initialize providerFilter from URL ?provider= param so the page
+  // can be bookmarked / deep-linked to a specific provider (#4217).
+  const [providerFilter, _setProviderFilter] = useState(
+    () => searchParams?.get("provider") || "all"
+  );
+  // Wrapper: keeps URL in sync with the selected provider so the view can be
+  // bookmarked. Replaces the URL without adding to browser history.
+  const setProviderFilter = useCallback((value) => {
+    _setProviderFilter(value);
+    try {
+      const params = new URLSearchParams(searchParams?.toString() || "");
+      if (value === "all") {
+        params.delete("provider");
+      } else {
+        params.set("provider", value);
+      }
+      const newUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
+      router.replace(newUrl, { scroll: false });
+    } catch { /* non-fatal: URL sync is best-effort */ }
+  }, [pathname, router, searchParams]);
   const [providerOptions, setProviderOptions] = useState([]);
   const [accountFilter, setAccountFilter] = useState("all");
   const [searchInput, setSearchInput] = useState("");
@@ -192,6 +219,7 @@ export function useProviderLimits() {
         message: data.message || null,
         // Grok CLI: Enabled/Disabled from onDemandCap (CLIProxyAPI-style row)
         payAsYouGo: data.payAsYouGo || null,
+        validation: data.validation || null,
         raw: data,
       };
 
@@ -354,6 +382,10 @@ export function useProviderLimits() {
       .then((res) => (res.ok ? res.json() : null))
       .then((settings) => {
         if (cancelled || !settings) return;
+        setAutoPingConfigs({
+          claude: settings.claudeAutoPing || {},
+          codex: settings.codexAutoPing || {},
+        });
         setAutoPingMaps({
           claude: settings.claudeAutoPing?.connections || {},
           codex: settings.codexAutoPing?.connections || {},
@@ -364,6 +396,54 @@ export function useProviderLimits() {
       cancelled = true;
     };
   }, []);
+
+  const handleSaveAutoPing = useCallback(
+    async (connectionId, provider, { reactive, schedule }) => {
+      const settingsKey =
+        provider === "claude" ? "claudeAutoPing" : "codexAutoPing";
+      const previous = autoPingConfigs;
+      const prevCfg = autoPingConfigs[provider] || {};
+      const nextProviderCfg = {
+        ...prevCfg,
+        connections: {
+          ...(prevCfg.connections || {}),
+          [connectionId]: reactive,
+        },
+        schedules: {
+          ...(prevCfg.schedules || {}),
+          [connectionId]: schedule,
+        },
+      };
+      const nextConfigs = { ...autoPingConfigs, [provider]: nextProviderCfg };
+      setAutoPingConfigs(nextConfigs);
+      setAutoPingMaps({
+        claude: nextConfigs.claude.connections || {},
+        codex: nextConfigs.codex.connections || {},
+      });
+
+      try {
+        const r = await fetch("/api/settings", { cache: "no-store" });
+        const s = r.ok ? await r.json() : {};
+        const fullCfg = {
+          ...(s[settingsKey] || {}),
+          connections: nextProviderCfg.connections,
+          schedules: nextProviderCfg.schedules,
+        };
+        await fetch("/api/settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [settingsKey]: fullCfg }),
+        });
+      } catch {
+        setAutoPingConfigs(previous);
+        setAutoPingMaps({
+          claude: previous.claude.connections || {},
+          codex: previous.codex.connections || {},
+        });
+      }
+    },
+    [autoPingConfigs],
+  );
 
   const toggleAutoPing = useCallback(async (connection) => {
     const provider = connection?.provider;
@@ -537,6 +617,7 @@ export function useProviderLimits() {
             plan: cachedEntry.plan,
             message: cachedEntry.message,
             payAsYouGo: cachedEntry.payAsYouGo || null,
+            validation: cachedEntry.validation || null,
             raw: cachedEntry.raw,
           };
           if (cachedEntry.cachedAt) {
@@ -733,7 +814,9 @@ export function useProviderLimits() {
     resetConfirmState,
     setResetConfirmState,
     autoPingMaps,
+    autoPingConfigs,
     toggleAutoPing,
+    handleSaveAutoPing,
     resetCreditsState,
     setResetCreditsState,
     showEditModal,

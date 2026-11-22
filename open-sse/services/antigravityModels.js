@@ -50,7 +50,7 @@ export async function resolveAntigravityModels(credentials, options = {}) {
     Authorization: `Bearer ${credentials.accessToken}`,
     "User-Agent": ANTIGRAVITY_IDE_USER_AGENT || getPlatformUserAgent(),
     "X-Client-Name": "antigravity",
-    "X-Client-Version": ANTIGRAVITY_IDE_VERSION || "2.11.0",
+    "X-Client-Version": ANTIGRAVITY_IDE_VERSION || "2.22.0",
   };
 
   return fetchWithFallback({

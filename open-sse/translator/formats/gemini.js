@@ -1,7 +1,9 @@
 // Gemini helper functions for translator
+import crypto from "node:crypto";
 
 import { safeParseJSON } from "../concerns/json.js";
 import { OPENAI_BLOCK } from "../schema/index.js";
+import { isGemini4Model } from "../../providers/capabilities.js";
 
 // Unsupported JSON Schema constraints that should be removed for Antigravity
 export const UNSUPPORTED_SCHEMA_CONSTRAINTS = [
@@ -126,10 +128,18 @@ export function generateSessionId() {
   return crypto.randomUUID() + Date.now().toString();
 }
 
-// Generate project ID
-export function generateProjectId() {
+// Generate project ID (deterministic if seed provided, e.g. connectionId or email)
+export function generateProjectId(seed = "") {
   const adjectives = ["useful", "bright", "swift", "calm", "bold"];
   const nouns = ["fuze", "wave", "spark", "flow", "core"];
+  if (seed) {
+    const hash = crypto.createHash("sha256").update(String(seed)).digest("hex");
+    const num1 = parseInt(hash.slice(0, 4), 16);
+    const num2 = parseInt(hash.slice(4, 8), 16);
+    const adj = adjectives[num1 % adjectives.length];
+    const noun = nouns[num2 % nouns.length];
+    return `${adj}-${noun}-${hash.slice(8, 13)}`;
+  }
   const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
   const noun = nouns[Math.floor(Math.random() * nouns.length)];
   return `${adj}-${noun}-${crypto.randomUUID().slice(0, 5)}`;
@@ -307,7 +317,14 @@ function flattenTypeArrays(obj) {
 function ensureObjectType(obj) {
   if (!obj || typeof obj !== "object") return;
   if (obj.properties && !obj.type) obj.type = "object";
-  for (const v of Object.values(obj)) if (v && typeof v === "object") ensureObjectType(v);
+  for (const [key, v] of Object.entries(obj)) {
+    if (!v || typeof v !== "object") continue;
+    if (key === "properties" && !Array.isArray(v)) {
+      for (const sub of Object.values(v)) ensureObjectType(sub);
+    } else {
+      ensureObjectType(v);
+    }
+  }
 }
 
 // Convert prefixItems (tuple validation) to items — Gemini cannot express tuples,
@@ -341,12 +358,126 @@ function ensureArrayItems(obj) {
   for (const v of Object.values(obj)) if (v && typeof v === "object") ensureArrayItems(v);
 }
 
+// Dereference internal $ref pointers in JSON Schema (e.g. #/properties/foo, #/$defs/bar, #/definitions/baz)
+function resolveJsonPointer(root, pointer) {
+  if (!pointer || typeof pointer !== "string") return null;
+  if (!pointer.startsWith("#/")) return null;
+  const parts = pointer
+    .slice(2)
+    .split("/")
+    .map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"));
+  let curr = root;
+  for (const part of parts) {
+    if (curr && typeof curr === "object" && part in curr) {
+      curr = curr[part];
+    } else {
+      return null;
+    }
+  }
+  return curr;
+}
+
+function dereferenceSchema(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+
+  function resolveRefs(obj, root, depth = 0) {
+    if (!obj || typeof obj !== "object" || depth > 10) return;
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        if (item && typeof item === "object") {
+          resolveRefs(item, root, depth + 1);
+        }
+      }
+      return;
+    }
+
+    if (typeof obj.$ref === "string") {
+      const target = resolveJsonPointer(root, obj.$ref);
+      if (target && typeof target === "object") {
+        const resolvedTarget = structuredClone(target);
+        resolveRefs(resolvedTarget, root, depth + 1);
+        const { $ref, ...currentOverrides } = obj;
+        delete obj.$ref;
+        Object.assign(obj, resolvedTarget, currentOverrides);
+      }
+    }
+
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (val && typeof val === "object") {
+        resolveRefs(val, root, depth + 1);
+      }
+    }
+  }
+
+  resolveRefs(schema, schema);
+  return schema;
+}
+
+// Ensure all schema properties and array items have a valid type field (Gemini 400 rejection prevention)
+function ensurePropertyTypes(obj) {
+  if (!obj || typeof obj !== "object") return;
+
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      ensurePropertyTypes(item);
+    }
+    return;
+  }
+
+  if (obj.properties && typeof obj.properties === "object") {
+    if (!obj.type) obj.type = "object";
+    for (const propVal of Object.values(obj.properties)) {
+      if (propVal && typeof propVal === "object") {
+        if (!propVal.type) {
+          if (propVal.properties) {
+            propVal.type = "object";
+          } else if (propVal.items) {
+            propVal.type = "array";
+          } else if (propVal.enum) {
+            propVal.type = "string";
+          } else {
+            propVal.type = "string";
+          }
+        }
+        ensurePropertyTypes(propVal);
+      }
+    }
+  }
+
+  if (obj.items && typeof obj.items === "object") {
+    if (!obj.type) obj.type = "array";
+    if (!obj.items.type && !Array.isArray(obj.items)) {
+      if (obj.items.properties) {
+        obj.items.type = "object";
+      } else if (obj.items.items) {
+        obj.items.type = "array";
+      } else if (obj.items.enum) {
+        obj.items.type = "string";
+      } else {
+        obj.items.type = "string";
+      }
+    }
+    ensurePropertyTypes(obj.items);
+  }
+
+  for (const [k, v] of Object.entries(obj)) {
+    if (k !== "properties" && k !== "items" && v && typeof v === "object") {
+      ensurePropertyTypes(v);
+    }
+  }
+}
+
 // Clean JSON Schema for Antigravity API compatibility - removes unsupported keywords recursively
 export function cleanJSONSchemaForAntigravity(schema) {
   if (!schema || typeof schema !== "object") return schema;
 
   // Mutate directly (schema is only used once per request)
   let cleaned = schema;
+
+  // Phase 0: Resolve internal $ref pointers before $defs/definitions/$ref are stripped
+  dereferenceSchema(cleaned);
 
   // Phase 1: Convert and prepare
   convertConstToEnum(cleaned);
@@ -358,9 +489,10 @@ export function cleanJSONSchemaForAntigravity(schema) {
   flattenAnyOfOneOf(cleaned);
   flattenTypeArrays(cleaned);
 
-  // Phase 2.5: Infer missing type=object when properties exist (Gemini requirement)
+  // Phase 2.5: Infer missing type=object / type=array when properties/items exist
   ensureObjectType(cleaned);
   ensureArrayItems(cleaned);
+  ensurePropertyTypes(cleaned);
 
   // Phase 3: Remove all unsupported keywords at ALL levels (including inside arrays)
   removeUnsupportedKeywords(cleaned, UNSUPPORTED_SCHEMA_CONSTRAINTS);
@@ -389,6 +521,9 @@ export function cleanJSONSchemaForAntigravity(schema) {
   }
 
   cleanupRequired(cleaned);
+
+  // Phase 4.5: Re-verify all property types after keyword stripping
+  ensurePropertyTypes(cleaned);
 
   // Phase 5: Add placeholder for empty object schemas (Antigravity requirement)
   function addPlaceholders(obj) {
@@ -430,5 +565,120 @@ export function cleanJSONSchemaForAntigravity(schema) {
   addPlaceholders(cleaned);
 
   return cleaned;
+}
+
+// Gemini / Cloud Code treat a `$ref` key inside functionResponse.response as a
+// pointer to functionResponse.parts and reject the request with
+// "The referenced name `#/$defs/...` in function_response.response does not match
+// to a display_name in the function_response.parts". Tool results that carry a
+// JSON Schema / OpenAPI document (webfetch, read, MCP) hit this, so rename the key.
+export const GEMINI_RESERVED_RESPONSE_KEYS = { "$ref": "_ref" };
+
+// Recursively rename reserved keys in a tool-result payload (arrays/objects only)
+export function sanitizeFunctionResponsePayload(value) {
+  if (Array.isArray(value)) return value.map(sanitizeFunctionResponsePayload);
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, val] of Object.entries(value)) {
+    out[GEMINI_RESERVED_RESPONSE_KEYS[key] ?? key] = sanitizeFunctionResponsePayload(val);
+  }
+  return out;
+}
+
+// Return the part with a sanitized functionResponse.response (same reference when untouched)
+function sanitizeFunctionResponsePart(part) {
+  const response = part?.functionResponse?.response;
+  if (!response || typeof response !== "object") return part;
+  return { ...part, functionResponse: { ...part.functionResponse, response: sanitizeFunctionResponsePayload(response) } };
+}
+
+function contentHasFunctionResponse(content) {
+  return (content?.parts || []).some((p) => p?.functionResponse);
+}
+
+function contentHasPlainText(content) {
+  return (content?.parts || []).some(
+    (p) => typeof p?.text === "string" && p.text.length > 0,
+  );
+}
+
+// Gemini 4 rejects a merged user turn whose last part is not a functionResponse (#4802)
+function moveFunctionResponsesLast(parts) {
+  const responses = parts.filter(p => p.functionResponse);
+  if (!responses.length) return parts;
+  return [...parts.filter(p => !p.functionResponse), ...responses];
+}
+
+// Merge adjacent same-role messages, strip empty parts, ensure initial user turn
+// Do NOT merge functionResponse turns with follow-up user text — that shape triggers 400 INVALID_ARGUMENT on Gemini/Antigravity.
+export function normalizeGeminiContents(contents, model = null) {
+  const frLast = isGemini4Model(model);
+  const out = [];
+  for (const c of contents || []) {
+    if (!c?.role || !Array.isArray(c.parts)) continue;
+    const parts = c.parts.filter(p => p && Object.keys(p).length > 0).map(sanitizeFunctionResponsePart);
+    if (parts.length === 0) continue;
+    const last = out.at(-1);
+    if (last?.role === c.role) {
+      if (contentHasFunctionResponse(last) && contentHasPlainText(c)) {
+        // Embed user follow-up text into the function response data instead of
+        // inserting a synthetic model turn (which pollutes conversation history
+        // and causes the model to mimic dummy acknowledgements and stop).
+        const textParts = c.parts.filter(p => typeof p?.text === "string" && p.text.length > 0);
+        const combinedText = textParts.map(p => p.text).join("\n\n");
+        const frParts = last.parts.filter(p => p.functionResponse);
+        const targetFr = frParts.at(-1)?.functionResponse;
+        if (targetFr && combinedText) {
+          if (typeof targetFr.response === "object" && targetFr.response !== null) {
+            targetFr.response.user_instruction = combinedText;
+          } else {
+            targetFr.response = { result: targetFr.response, user_instruction: combinedText };
+          }
+        }
+        continue;
+      }
+      if (contentHasPlainText(last) && contentHasFunctionResponse(c)) {
+        const textParts = last.parts.filter(p => typeof p?.text === "string" && p.text.length > 0);
+        const combinedText = textParts.map(p => p.text).join("\n\n");
+        const frParts = c.parts.filter(p => p.functionResponse);
+        const targetFr = frParts.at(-1)?.functionResponse;
+        if (targetFr && combinedText) {
+          if (typeof targetFr.response === "object" && targetFr.response !== null) {
+            targetFr.response.user_instruction = combinedText;
+          } else {
+            targetFr.response = { result: targetFr.response, user_instruction: combinedText };
+          }
+        }
+        last.parts = frParts;
+        continue;
+      }
+      last.parts.push(...parts);
+      if (frLast) last.parts = moveFunctionResponsesLast(last.parts);
+      continue;
+    }
+    const finalParts = frLast && c.role === "user" ? moveFunctionResponsesLast(parts) : parts;
+    out.push({ ...c, parts: [...finalParts] });
+  }
+  if (out.length > 0 && out[0].role !== "user") {
+    out.unshift({ role: "user", parts: [{ text: "Continue." }] });
+  }
+  if (out.length > 0 && out.at(-1).role === "model") {
+    const fnCalls = (out.at(-1).parts || []).filter(p => p && p.functionCall);
+    if (fnCalls.length > 0) {
+      const responses = fnCalls.map(p => {
+        const call = p.functionCall || {};
+        const fr = {
+          name: call.name || "tool",
+          response: { result: "Continue." }
+        };
+        if (call.id) fr.id = call.id;
+        return { functionResponse: fr };
+      });
+      out.push({ role: "user", parts: responses });
+    } else {
+      out.push({ role: "user", parts: [{ text: "Continue." }] });
+    }
+  }
+  return out;
 }
 

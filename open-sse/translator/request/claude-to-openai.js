@@ -3,7 +3,10 @@ import { FORMATS } from "../formats.js";
 import { v4 as uuidv4 } from "uuid";
 import { extractThinking } from "../concerns/thinkingUnified.js";
 import { effortToBudget, budgetToLevel } from "../concerns/thinking.js";
+import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { systemReminderText } from "../helpers/claudeHelper.js";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.js";
+import { encodeDataUri } from "../concerns/image.js";
 
 function stripAnthropicBillingHeader(text) {
   if (typeof text !== "string") return "";
@@ -165,13 +168,13 @@ function fixMissingToolResponses(messages) {
 // Convert single Claude message - returns single message or array of messages
 function convertClaudeMessage(msg) {
   // Upstream fix from open-sse commit 749c2e3f9
-  // Map mid-conversation system message to user role to prevent 400 errors with LiteLLM
-  // Claude Code inserts role:system at end of messages[], previously mapped to assistant
-  // causing conversation not ending with user → OpenAI-compat provider (LiteLLM) translates
-  // back to Anthropic returning 400 "assistant message prefill"
   let role = msg.role === "user" || msg.role === "tool" ? "user" : "assistant";
-  if (msg.role === "system") {
-    role = "user"; // Map system → user and wrap in <system-reminder> to preserve instruction semantics
+  if (msg.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
+    msg.content = [msg.content];
+  }
+  if (msg.role === ROLE.SYSTEM) {
+    const text = systemReminderText(msg.content);
+    return text ? { role: ROLE.USER, content: text } : null;
   }
 
   // Simple string content
@@ -219,16 +222,23 @@ function convertClaudeMessage(msg) {
           });
           break;
 
-        case "tool_result":
+        case CLAUDE_BLOCK.TOOL_RESULT: {
           let resultContent = "";
+          const resultImages = [];
           if (typeof block.content === "string") {
             resultContent = block.content;
           } else if (Array.isArray(block.content)) {
-            resultContent =
-              block.content
-                .filter((c) => c.type === "text")
-                .map((c) => c.text)
-                .join("\n") || JSON.stringify(block.content);
+            for (const c of block.content) {
+              if (c?.type === CLAUDE_BLOCK.IMAGE && c.source?.type === "base64") {
+                resultImages.push({
+                  type: OPENAI_BLOCK.IMAGE_URL,
+                  image_url: { url: encodeDataUri(c.source.media_type, c.source.data) }
+                });
+              }
+            }
+            const textOnly = block.content.filter(c => c?.type === CLAUDE_BLOCK.TEXT);
+            resultContent = textOnly.map(c => c.text).join("\n")
+              || (resultImages.length ? "" : JSON.stringify(block.content));
           } else if (block.content) {
             resultContent = JSON.stringify(block.content);
           }
@@ -238,7 +248,15 @@ function convertClaudeMessage(msg) {
             tool_call_id: block.tool_use_id,
             content: resultContent,
           });
+          // The OpenAI tool role is text-only, so a screenshot or any other image a
+          // tool returned would otherwise vanish. Hand it to the model in the user
+          // turn that follows the tool messages, tagged with the call it came from.
+          if (resultImages.length) {
+            parts.push({ type: OPENAI_BLOCK.TEXT, text: `[Image from tool result ${block.tool_use_id}]` });
+            parts.push(...resultImages);
+          }
           break;
+        }
       }
     }
 

@@ -46,6 +46,14 @@ function convertFinishReason(reason) {
  * Convert one OpenAI-format chunk (from KiroExecutor) into Claude SSE events.
  * Returns an array of Claude events, or null when the chunk yields nothing.
  */
+// Kiro only accepts sanitized tool names; the request translator leaves the
+// reverse map on the stream state so calls come back under the client's names.
+function restoreToolName(stateOrData, name) {
+  const raw = name || "";
+  const map = stateOrData?.toolNameMap || stateOrData?._toolNameMap;
+  return map && typeof map.get === "function" && map.has(raw) ? map.get(raw) : raw;
+}
+
 export function kiroToClaudeResponse(chunk, state) {
   // KiroExecutor emits chat.completion.chunk objects; tolerate string chunks
   // by attempting a parse (defensive — the direct path is always objects).
@@ -182,7 +190,7 @@ export function kiroToClaudeResponse(chunk, state) {
         const toolName = state.toolNameMap?.get(rawName) || rawName;
         state.toolCalls.set(idx, {
           id: tc.id,
-          name: toolName,
+          name: restoreToolName(state, tc.function?.name),
           blockIndex: toolBlockIndex,
         });
         results.push({
@@ -191,7 +199,7 @@ export function kiroToClaudeResponse(chunk, state) {
           content_block: {
             type: "tool_use",
             id: tc.id,
-            name: toolName,
+            name: restoreToolName(state, tc.function?.name),
             input: {},
           },
         });
@@ -276,7 +284,7 @@ export function kiroToClaudeNonStreaming(data, state = null) {
       content.push({
         type: "tool_use",
         id: tc.id || `toolu_${Date.now()}`,
-        name: toolName,
+        name: restoreToolName(data, tc.function?.name),
         input,
       });
     }

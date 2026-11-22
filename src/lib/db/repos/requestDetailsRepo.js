@@ -6,6 +6,7 @@ const DEFAULT_MAX_RECORDS = 200;
 const DEFAULT_BATCH_SIZE = 50;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_MAX_JSON_SIZE = 5 * 1024;
+const DEFAULT_SLOW_REQUEST_THRESHOLD_MS = 30000;
 const CONFIG_CACHE_TTL_MS = 30000;
 
 let cachedConfig = null;
@@ -83,7 +84,28 @@ function sanitizeHeaders(headers) {
   return sanitized;
 }
 
-export const __test__ = { sanitizeHeaders, getObservabilityConfig };
+function isSlowOrErrorRequest(detail) {
+  if (!detail) return false;
+  if (process.env.ENABLE_SLOW_REQUEST_OBSERVABILITY === "false") return false;
+
+  const threshold =
+    parseInt(process.env.SLOW_REQUEST_THRESHOLD_MS, 10) ||
+    DEFAULT_SLOW_REQUEST_THRESHOLD_MS;
+
+  const total = detail.latency?.total;
+  const isSlow = typeof total === "number" && total >= threshold;
+  const isError =
+    (detail.status &&
+      detail.status !== "success" &&
+      detail.status !== 200 &&
+      detail.status !== "200 OK") ||
+    Boolean(detail.error) ||
+    Boolean(detail.response?.error);
+
+  return isSlow || isError;
+}
+
+export const __test__ = { sanitizeHeaders, getObservabilityConfig, isSlowOrErrorRequest };
 
 function generateDetailId(model) {
   const timestamp = new Date().toISOString();
@@ -246,14 +268,19 @@ async function flushToDatabase() {
 }
 
 export async function saveRequestDetail(detail) {
+  if (!detail) return;
   const config = await getObservabilityConfig();
-  if (!config.enabled) return;
+  const allowEmergencySave = isSlowOrErrorRequest(detail);
+  if (!config.enabled && !allowEmergencySave) return;
 
   writeBuffer.push(detail);
 
-  // Trigger immediate flush if batch threshold reached.
+  // Trigger immediate flush if batch threshold reached or if emergency slow/error record saved while disabled.
   // flushToDatabase() drains entire buffer in a loop, so all pushes during await are persisted.
-  if (writeBuffer.length >= config.batchSize) {
+  if (
+    writeBuffer.length >= config.batchSize ||
+    (allowEmergencySave && !config.enabled)
+  ) {
     if (flushTimer) {
       clearTimeout(flushTimer);
       flushTimer = null;

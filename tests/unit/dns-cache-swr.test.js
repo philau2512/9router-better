@@ -9,8 +9,13 @@ describe("DNS Cache SWR (Stale-While-Revalidate)", () => {
 
     // 1. Mock dns module supporting promises.Resolver and default export before any import
     mockResolve4 = vi.fn().mockResolvedValue(["1.1.1.1"]);
+    const mockLookup = vi.fn((hostname, cb) => cb(null, "172.217.115.4"));
     vi.doMock("dns", () => {
       const mockDns = {
+        lookup: (hostname, options, callback) => {
+          const cb = typeof options === "function" ? options : callback;
+          mockLookup(hostname, cb);
+        },
         Resolver: class {
           setServers() {}
           resolve4(hostname, callback) {
@@ -148,5 +153,23 @@ describe("DNS Cache SWR (Stale-While-Revalidate)", () => {
     // 3rd call - should still return the old IP ("1.1.1.1") since refresh failed and cache was not evicted/cleared
     const postFailIp = await resolveRealIP("api.opencode.ai");
     expect(postFailIp).toBe("1.1.1.1");
+  });
+
+  it("shouldBypassMitmDns returns false when target host resolves to a public IP", async () => {
+    const { shouldBypassMitmDns } = await import("open-sse/utils/dns-resolver.js");
+    const result = await shouldBypassMitmDns("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
+    expect(result).toBe(false);
+  });
+
+  it("shouldBypassMitmDns returns true when target host is spoofed to loopback", async () => {
+    const dns = await import("dns");
+    vi.spyOn(dns.default, "lookup").mockImplementation((hostname, options, callback) => {
+      const cb = typeof options === "function" ? options : callback;
+      cb(null, "127.0.0.1", 4);
+    });
+
+    const { shouldBypassMitmDns } = await import("open-sse/utils/dns-resolver.js");
+    const result = await shouldBypassMitmDns("https://daily-cloudcode-pa.googleapis.com:443/v1internal:generateContent");
+    expect(result).toBe(true);
   });
 });

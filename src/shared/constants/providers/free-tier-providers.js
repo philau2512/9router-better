@@ -5,6 +5,33 @@
 
 // Free Tier Providers (has free access but may require account/API key)
 export const FREE_TIER_PROVIDERS = {
+  nous: {
+    id: "nous",
+    alias: "nous",
+    aliases: ["nous-portal", "nous-research", "ns"],
+    uiAlias: "nous",
+    name: "Nous Research",
+    icon: "psychology",
+    color: "#7C3AED",
+    textIcon: "NR",
+    website: "https://nousresearch.com",
+    notice: {
+      text: "Connect with OAuth Device Code (free account, no payment required) or a Nous Portal API key.",
+      signupUrl: "https://portal.nousresearch.com",
+      apiKeyUrl: "https://portal.nousresearch.com/api-keys",
+    },
+    category: "freeTier",
+    authType: "oauth",
+    authModes: ["oauth", "apikey"],
+    hasOAuth: true,
+    hasFree: true,
+    modelsFetcher: {
+      url: "https://inference-api.nousresearch.com/v1/models",
+      type: "nous-free",
+    },
+    passthroughModels: true,
+    serviceKinds: ["llm"],
+  },
   openrouter: {
     id: "openrouter",
     alias: "openrouter",

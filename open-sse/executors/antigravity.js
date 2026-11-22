@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { BaseExecutor, waitForAbortableDelay } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import {
@@ -21,6 +21,7 @@ import {
 } from "../translator/helpers/geminiHelper.js";
 import { ANTIGRAVITY_MODEL_ALIASES } from "../providers/antigravity-provider-metadata.js";
 import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
+import { normalizeGeminiContents } from "../translator/formats/gemini.js";
 import { DEFAULT_THINKING_AG_SIGNATURE } from "../config/defaultThinkingSignature.js";
 import { getGeminiThoughtSignatureSync } from "../services/thoughtSignatureStore.js";
 
@@ -72,6 +73,10 @@ const ANTIGRAVITY_TRANSIENT_ERROR_PATTERNS = [
   /timeout/i,
   /stream\s+(ended|closed|terminated|interrupted)/i,
   /empty\s+response/i,
+  /eof/i,
+  /socket\s+hang\s+up/i,
+  /econnereset/i,
+  /fetch\s+failed/i,
 ];
 
 const ANTIGRAVITY_TRANSIENT_STATUSES = new Set([
@@ -140,6 +145,41 @@ export class AntigravityExecutor extends BaseExecutor {
     super("antigravity", PROVIDERS.antigravity);
   }
 
+  // Parse Antigravity quota error to extract precise resetsAtMs from ErrorInfo/RetryInfo
+  parseError(response, bodyText) {
+    if ((response.status === 429 || response.status === 409) && bodyText) {
+      try {
+        const json = JSON.parse(bodyText);
+        const err = json?.error;
+        let resetsAtMs = null;
+        const details = Array.isArray(err?.details) ? err.details : [];
+        for (const d of details) {
+          if (d?.metadata?.quotaResetTimeStamp) {
+            const ms = new Date(d.metadata.quotaResetTimeStamp).getTime();
+            if (!isNaN(ms) && ms > Date.now()) {
+              resetsAtMs = ms;
+              break;
+            }
+          }
+          if (typeof d?.retryDelay === "string") {
+            const sec = parseFloat(d.retryDelay);
+            if (!isNaN(sec) && sec > 0) {
+              const ms = Date.now() + Math.round(sec * 1000);
+              if (ms > Date.now()) {
+                resetsAtMs = ms;
+                break;
+              }
+            }
+          }
+        }
+        if (resetsAtMs) {
+          return { status: response.status, message: err?.message || bodyText, resetsAtMs };
+        }
+      } catch { /* fall through to default */ }
+    }
+    return super.parseError(response, bodyText);
+  }
+
   buildUrl(model, stream, urlIndex = 0) {
     const baseUrls = this.getBaseUrls();
     const baseUrl = baseUrls[urlIndex] || baseUrls[0];
@@ -152,7 +192,7 @@ export class AntigravityExecutor extends BaseExecutor {
     return `${baseUrl}/v1internal:${action}`;
   }
 
-  buildHeaders(credentials, stream = true, sessionId = null) {
+  buildHeaders(credentials, stream = true, sessionId = null, model = "") {
     return {
       "Content-Type": "application/json",
       Authorization: `Bearer ${credentials.accessToken}`,
@@ -160,13 +200,18 @@ export class AntigravityExecutor extends BaseExecutor {
         this.config.headers?.["User-Agent"] ||
         ANTIGRAVITY_HEADERS["User-Agent"],
       ...(sessionId && { "X-Machine-Session-Id": sessionId }),
+      ...(String(model || "").toLowerCase().includes("claude") && {
+        "Anthropic-Beta":
+          "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+      }),
       Accept: stream ? "text/event-stream" : "application/json",
     };
   }
 
   transformRequest(model, body, stream, credentials) {
     body = structuredClone(body);
-    const projectId = credentials?.projectId || this.generateProjectId();
+    const seed = credentials?.connectionId || credentials?.email || credentials?.id || "";
+    const projectId = credentials?.projectId || this.generateProjectId(seed);
 
     // OpenAI clients may include stream_options even for non-streaming calls.
     // Google generateContent rejects that combination before processing the request.
@@ -178,15 +223,17 @@ export class AntigravityExecutor extends BaseExecutor {
       // Strip model name suffixes for the actual API model name
       const cleanModel = model.replace(/-(\d+)x(\d+)$/, "");
 
-      // Build simplified contents — text-only, merge all user messages
+      // Build simplified contents — keep text and inlineData (reference images), merge all user messages
       const contents = [];
       const srcContents = body.request?.contents || body.contents || [];
       for (const c of srcContents) {
-        const textParts = (c.parts || [])
-          .filter((p) => p.text !== undefined)
-          .map((p) => ({ text: p.text }));
-        if (textParts.length > 0) {
-          contents.push({ role: c.role || "user", parts: textParts });
+        const imageParts = (c.parts || []).flatMap((p) => {
+          if (p.text !== undefined) return [{ text: p.text }];
+          if (p.inlineData?.data) return [{ inlineData: p.inlineData }];
+          return [];
+        });
+        if (imageParts.length > 0) {
+          contents.push({ role: c.role || "user", parts: imageParts });
         }
       }
 
@@ -223,7 +270,7 @@ export class AntigravityExecutor extends BaseExecutor {
     const keepThoughtParts = shouldPreserveThoughtParts(
       body.request?.generationConfig,
     );
-    const contents = body.request?.contents?.map((c) => {
+    const rawContents = (body.request?.contents || []).map((c) => {
       let role = c.role;
       // functionResponse must be role "user" for Claude models
       if (c.parts?.some((p) => p.functionResponse)) {
@@ -246,7 +293,7 @@ export class AntigravityExecutor extends BaseExecutor {
         if (part.functionCall) {
           const callId = part.functionCall.id;
           const cachedSignature = callId
-            ? getGeminiThoughtSignatureSync(callId, sessionId)
+            ? getGeminiThoughtSignatureSync(callId, sessionId, body.model || model)
             : null;
           const thoughtSignature =
             part.thoughtSignature ||
@@ -285,6 +332,12 @@ export class AntigravityExecutor extends BaseExecutor {
       }
       return c;
     });
+    const normalizedContents = normalizeGeminiContents(rawContents, model);
+    const contents =
+      rawContents[0]?.role === "model" &&
+      rawContents[0]?.parts?.some((part) => part.thought === true)
+        ? normalizedContents.slice(1)
+        : normalizedContents;
 
     // Sanitize tool schemas and function names before sending to Antigravity.
     let tools = body.request?.tools;
@@ -375,6 +428,7 @@ export class AntigravityExecutor extends BaseExecutor {
       userAgent: "antigravity",
       requestType: "agent",
       requestId: `agent-${crypto.randomUUID()}`,
+      enabledCreditTypes: ["GOOGLE_ONE_AI"],
       request: transformedRequest,
     };
   }
@@ -418,14 +472,18 @@ export class AntigravityExecutor extends BaseExecutor {
     }
   }
 
-  generateProjectId() {
-    const adj = ["useful", "bright", "swift", "calm", "bold"][
-      Math.floor(Math.random() * 5)
-    ];
-    const noun = ["fuze", "wave", "spark", "flow", "core"][
-      Math.floor(Math.random() * 5)
-    ];
-    return `${adj}-${noun}-${crypto.randomUUID().slice(0, 5)}`;
+  generateProjectId(seed = "") {
+    const adj = ["useful", "bright", "swift", "calm", "bold"];
+    const noun = ["fuze", "wave", "spark", "flow", "core"];
+    if (seed) {
+      const hash = crypto.createHash("sha256").update(String(seed)).digest("hex");
+      const num1 = parseInt(hash.slice(0, 4), 16);
+      const num2 = parseInt(hash.slice(4, 8), 16);
+      return `${adj[num1 % adj.length]}-${noun[num2 % noun.length]}-${hash.slice(8, 13)}`;
+    }
+    const a = adj[Math.floor(Math.random() * adj.length)];
+    const n = noun[Math.floor(Math.random() * noun.length)];
+    return `${a}-${n}-${crypto.randomUUID().slice(0, 5)}`;
   }
 
   generateSessionId() {
@@ -609,7 +667,7 @@ export class AntigravityExecutor extends BaseExecutor {
         credentials,
       );
       const sessionId = transformedBody.request?.sessionId;
-      const headers = this.buildHeaders(credentials, stream, sessionId);
+      const headers = this.buildHeaders(credentials, stream, sessionId, model);
 
       // Initialize retry counters for this URL
       if (!retryAttemptsByUrl[urlIndex]) {
@@ -709,6 +767,18 @@ export class AntigravityExecutor extends BaseExecutor {
           if (urlIndex + 1 < fallbackCount) {
             continue;
           }
+        }
+
+        if (
+          response.status === HTTP_STATUS.NOT_FOUND &&
+          urlIndex + 1 < fallbackCount
+        ) {
+          log?.debug?.(
+            "RETRY",
+            `${response.status} Not Found on ${url}, trying fallback ${urlIndex + 1}`,
+          );
+          lastStatus = response.status;
+          continue;
         }
 
         if (this.shouldRetry(response.status, urlIndex)) {

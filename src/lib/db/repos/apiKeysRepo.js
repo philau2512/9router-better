@@ -1,6 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { keyAccessFromColumns, keyAccessToColumns } from "@/shared/utils/keyAccess.js";
+import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
 
 const VALID_LIMIT_METRICS = new Set(["requests", "tokens", "cost"]);
 const VALID_LIMIT_PERIODS = new Set(["daily", "monthly"]);
@@ -56,6 +58,7 @@ function rowToKey(row) {
     allowedProviders: normalizeStoredAllowlist(row.allowedProviders),
     allowedModels: normalizeStoredAllowlist(row.allowedModels),
     createdAt: row.createdAt,
+    access: keyAccessFromColumns(row.accessRestricted, row.accessAllow),
     limit: normalizeLimitRow(row),
   };
 }
@@ -146,6 +149,8 @@ function selectApiKeyBaseSql(
       ak.allowedProviders,
       ak.allowedModels,
       ak.createdAt,
+      ak.accessRestricted,
+      ak.accessAllow,
       akl.id AS limitId,
       akl.metricType,
       akl.periodType,
@@ -177,6 +182,8 @@ export async function getApiKeyByValue(key) {
   return rowToKey(row);
 }
 
+export const getApiKeyByKey = getApiKeyByValue;
+
 export async function createApiKey(name, machineId, options = {}) {
   if (!machineId) throw new Error("machineId is required");
   const db = await getAdapter();
@@ -196,10 +203,11 @@ export async function createApiKey(name, machineId, options = {}) {
     "allowedProviders",
   );
   const allowedModels = normalizeAllowlistInput(options.allowedModels, "allowedModels");
+  const cols = keyAccessToColumns(options.access || KEY_ACCESS_UNRESTRICTED);
 
   db.transaction(() => {
     db.run(
-      `INSERT INTO apiKeys(id, key, name, machineId, isActive, allowedProviders, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO apiKeys(id, key, name, machineId, isActive, allowedProviders, allowedModels, createdAt, accessRestricted, accessAllow) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         apiKey.id,
         apiKey.key,
@@ -209,6 +217,8 @@ export async function createApiKey(name, machineId, options = {}) {
         stringifyJson(allowedProviders),
         stringifyJson(allowedModels),
         apiKey.createdAt,
+        cols.accessRestricted,
+        cols.accessAllow,
       ],
     );
     upsertApiKeyLimit(db, apiKey.id, normalizedLimit);
@@ -242,8 +252,12 @@ export async function updateApiKey(id, data) {
         ? normalizeAllowlistInput(data.allowedModels, "allowedModels")
         : normalizeStoredAllowlist(row.allowedModels),
     };
+    const accessCols = data.access !== undefined
+      ? keyAccessToColumns(data.access)
+      : { accessRestricted: row.accessRestricted ?? 0, accessAllow: row.accessAllow ?? null };
+
     db.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, allowedProviders = ?, allowedModels = ? WHERE id = ?`,
+      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, allowedProviders = ?, allowedModels = ?, accessRestricted = ?, accessAllow = ? WHERE id = ?`,
       [
         merged.key,
         merged.name,
@@ -251,6 +265,8 @@ export async function updateApiKey(id, data) {
         merged.isActive ? 1 : 0,
         stringifyJson(merged.allowedProviders),
         stringifyJson(merged.allowedModels),
+        accessCols.accessRestricted,
+        accessCols.accessAllow,
         id,
       ],
     );

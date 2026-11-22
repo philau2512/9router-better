@@ -130,9 +130,9 @@ export default function QuotaTable({
           <tbody>
             {currentRows.map((quota) => {
               const unknown = quota.unknown === true;
-              const colors = getColorClasses(quota.remaining, unknown);
+              const colors = getColorClasses(quota.colorPercentage ?? quota.remaining, unknown);
               const countdown = formatResetTime(quota.resetAt);
-              const resetDisplay = formatResetTimeDisplay(quota.resetAt);
+              const resetDisplay = quota.emptyMessage || formatResetTimeDisplay(quota.resetAt);
               const usageLabel = formatQuotaUsageLabel(quota);
               return (
                 <tr
