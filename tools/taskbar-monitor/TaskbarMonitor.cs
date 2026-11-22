@@ -212,6 +212,7 @@ namespace NineRouter.TaskbarMonitor
             // Load saved settings & geometry
             LoadSettings();
             ApplyBackgroundMode();
+            this.Cursor = _isLocked ? Cursors.Default : Cursors.SizeAll;
 
             // Context Menu
             BuildContextMenu();
@@ -400,15 +401,25 @@ namespace NineRouter.TaskbarMonitor
                         int targetX;
                         int targetY;
 
+                        // Modern Windows 11 Taskbar:
+                        // The Notification Chevron (^ button - Show hidden icons) is placed immediately
+                        // to the left of the notification icons / TrayNotifyWnd.
+                        // On 100% DPI (tbHeight=48) chevron+gap is ~48px.
+                        // On 150% DPI (tbHeight=72) chevron+gap is ~72px.
+                        // We reserve a generous dynamic buffer based on taskbar height (~1.15 * tbHeight + 24px)
+                        // so the widget never overlaps the chevron or system tray buttons.
+                        int chevronReserve = Math.Max(76, (int)Math.Round(tbHeight * 1.15) + 24);
+
                         if (foundTray && trayRect.Left > tbRect.Left)
                         {
-                            targetX = trayRect.Left - this.Width - 14;
+                            targetX = trayRect.Left - this.Width - chevronReserve;
                             targetY = tbRect.Top + Math.Max(2, (tbHeight - this.Height) / 2);
                         }
                         else
                         {
                             Screen primary = Screen.PrimaryScreen;
-                            targetX = primary.WorkingArea.Right - this.Width - 190;
+                            int fallbackMargin = Math.Max(380, (int)Math.Round(tbHeight * 5.5));
+                            targetX = primary.WorkingArea.Right - this.Width - fallbackMargin;
                             targetY = tbRect.Top + Math.Max(2, (tbHeight - this.Height) / 2);
                         }
 
@@ -420,7 +431,7 @@ namespace NineRouter.TaskbarMonitor
                 }
 
                 Screen scr = Screen.PrimaryScreen;
-                this.Location = new Point(scr.WorkingArea.Right - this.Width - 170, scr.Bounds.Bottom - this.Height - 6);
+                this.Location = new Point(scr.WorkingArea.Right - this.Width - 380, scr.Bounds.Bottom - this.Height - 6);
                 KeepTopMost();
                 SaveSettings();
             }
@@ -532,6 +543,7 @@ namespace NineRouter.TaskbarMonitor
             _lockMenuItem = new ToolStripMenuItem(_isLocked ? "Unlock Position" : "Lock Position", null, (s, e) => {
                 _isLocked = !_isLocked;
                 _lockMenuItem.Text = _isLocked ? "Unlock Position" : "Lock Position";
+                this.Cursor = _isLocked ? Cursors.Default : Cursors.SizeAll;
                 SaveSettings();
             });
 

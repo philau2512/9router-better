@@ -403,17 +403,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       if (quotaResetMs) resetsAtMs = quotaResetMs;
     }
 
-    if (provider === "antigravity" && result.status === 429) {
-      if (quotaResetMs) {
-        log.warn("FALLBACK", `⇄ ACC:${credentials.connectionName} QUOTA EXHAUSTED (${result.status}) → NEXT ACCOUNT`);
-        excludeConnectionIds.add(credentials.connectionId);
-        lastError = result.error;
-        lastStatus = result.status;
-        continue;
-      }
-      return result.response;
-    }
-
     const shouldFallback = (await markAccountUnavailable(
       credentials.connectionId,
       result.status,
